@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Check, Eye, EyeOff, Loader2, Mail, ArrowRight } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { apiUrl } from '../config/api';
+import { requestPasswordReset, resetPassword } from '../services/authService';
 import './AuthPage.css';
 
 interface AuthPageProps {
   defaultMode: 'signup' | 'login' | 'forgot';
 }
-
-const API = apiUrl('/api/auth');
 
 const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
   const [mode, setMode]       = useState<'signup' | 'login' | 'forgot' | 'reset'>(defaultMode);
@@ -90,13 +88,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
     setSuccess('');
     setLoading(true);
     try {
-      const res  = await fetch(`${API}/forgot-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message);
+      const data = await requestPasswordReset(email);
       setSuccess('Reset token generated! Check the response or your email.');
       // In dev: auto-fill token from response
       if (data.resetToken) setResetToken(data.resetToken);
@@ -119,13 +111,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
     }
     setLoading(true);
     try {
-      const res  = await fetch(`${API}/reset-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: resetToken, newPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message);
+      await resetPassword(resetToken, newPassword);
       setSuccess('Password reset! Redirecting to login…');
       setTimeout(() => { setMode('login'); setSuccess(''); }, 2000);
     } catch (err: unknown) {
