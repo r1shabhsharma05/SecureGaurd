@@ -16,6 +16,10 @@ import ComplianceReports from './ComplianceReports';
 import SbomPage from './SbomPage';
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
+import {
+  SEVERITY_FILTER_OPTIONS,
+  SCAN_TYPE_FILTER_OPTIONS,
+} from '../config/filterOptions';
 import './Dashboard.css';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -788,7 +792,7 @@ export default function Dashboard() {
                   </div>
                   <div className="vuln-filters" style={{ flexWrap: 'wrap', gap: '6px' }}>
                     <Filter size={14} />
-                    {['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(s => (
+                    {SEVERITY_FILTER_OPTIONS.map(s => (
                       <button
                         key={s}
                         className={`filter-btn ${filterSev === s ? 'active' : ''}`}
@@ -798,7 +802,7 @@ export default function Dashboard() {
                       </button>
                     ))}
                     <div style={{ height: '16px', width: '1px', background: 'var(--border-color)', margin: '0 2px' }} />
-                    {['ALL', 'SAST', 'IAC', 'API', 'TERRAFORM', 'KUBERNETES', 'DOCKER'].map(t => (
+                    {SCAN_TYPE_FILTER_OPTIONS.map(t => (
                       <button
                         key={t}
                         className={`filter-btn ${filterType === t ? 'active' : ''}`}
@@ -1195,7 +1199,7 @@ export default function Dashboard() {
               <h2 className="tab-title">Vulnerability Master Database ({filteredVulns.length})</h2>
               <div className="vuln-filters">
                 <Filter size={14} />
-                {['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(s => (
+                {SEVERITY_FILTER_OPTIONS.map(s => (
                   <button
                     key={s}
                     className={`filter-btn ${filterSev === s ? 'active' : ''}`}
