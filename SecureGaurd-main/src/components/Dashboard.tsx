@@ -15,6 +15,7 @@ import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 import ComplianceReports from './ComplianceReports';
 import SbomPage from './SbomPage';
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
+import { fixedPercentage } from '../utils/vulnStats';
 import './Dashboard.css';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -1299,7 +1300,7 @@ export default function Dashboard() {
                   <div className="stat-card" style={{border: '1px solid var(--border-color)', borderRadius: '8px'}}>
                     <span className="stat-label">Fixed Finding Pct</span>
                     <span className="stat-value" style={{color: 'var(--accent-green)'}}>
-                      {totalVulns > 0 ? ((vulns.filter(v => v.status === 'fixed').length / totalVulns) * 100).toFixed(0) : '0'}%
+                      {fixedPercentage(vulns, totalVulns)}%
                     </span>
                   </div>
                   <div className="stat-card" style={{border: '1px solid var(--border-color)', borderRadius: '8px'}}>
