@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
-import { apiUrl } from '../config/api';
+import { fetchInvitation, acceptInvitation } from '../services/invitationService';
 import './AcceptInvitePage.css';
 
 interface Props {
@@ -24,16 +24,10 @@ export const AcceptInvitePage: React.FC<Props> = ({ token, onAccepted, onNavigat
     (async () => {
       try {
         setLoading(true);
-        const res = await fetch(apiUrl(`/api/invitations/${token}`));
-        const data = await res.json();
-
-        if (!res.ok) {
-          setError(data.message || 'Invalid or expired invitation token');
-        } else {
-          setInvitation(data);
-        }
+        const data = await fetchInvitation(token);
+        setInvitation(data);
       } catch (err) {
-        setError('Failed to inspect invitation');
+        setError(err instanceof Error ? err.message : 'Failed to inspect invitation');
       } finally {
         setLoading(false);
       }
@@ -50,16 +44,7 @@ export const AcceptInvitePage: React.FC<Props> = ({ token, onAccepted, onNavigat
     setError(null);
 
     try {
-      const res = await fetch(apiUrl(`/api/invitations/${token}/accept`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include'
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to accept invitation');
-      }
+      const data = await acceptInvitation(token);
 
       setAcceptedOrg(data.organization);
       await fetchOrganizations();
