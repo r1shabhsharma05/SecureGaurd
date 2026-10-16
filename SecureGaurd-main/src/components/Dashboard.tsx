@@ -14,6 +14,7 @@ import { OrganizationSwitcher } from './OrganizationSwitcher';
 import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 import ComplianceReports from './ComplianceReports';
 import SbomPage from './SbomPage';
+import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import './Dashboard.css';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -510,21 +511,10 @@ export default function Dashboard() {
   const highPct = totalVulns > 0 ? ((totalCrit + totalHigh) / totalVulns) * 360 : 0;
   const medPct  = totalVulns > 0 ? ((totalCrit + totalHigh + totalMed) / totalVulns) * 360 : 0;
 
-  // Filtering
-  const filteredVulns = vulns.filter(v => {
-    const matchesSev = filterSev === 'ALL' || v.severity.toUpperCase() === filterSev;
-    const matchesType = filterType === 'ALL' || 
-                        v.type.toUpperCase() === filterType || 
-                        (v.mlFeatures?.framework && v.mlFeatures.framework.toUpperCase() === filterType);
-    const matchesSearch = v.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          v.filePath.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesSev && matchesType && matchesSearch;
-  });
+  // Filtering (predicates live in utils/vulnFilters.ts)
+  const filteredVulns = filterVulns(vulns, filterSev, filterType, searchQuery);
 
-  const filteredRepos = repos.filter(r => 
-    r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    r.fullName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredRepos = filterRepos(repos, searchQuery);
 
   const CI_CD_YAML = [
     'name: SecureGuard Security Scan',
