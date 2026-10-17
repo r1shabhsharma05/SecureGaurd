@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield, LayoutDashboard, GitBranch, Search,
-  Bell, ChevronDown, LogOut, AlertTriangle,
+  ChevronDown, LogOut, AlertTriangle,
   CheckCircle2, XCircle, Clock, Activity,
   FileCode2, Zap, Settings, Database, BarChart3,
-  Play, RefreshCw, Eye, Filter, ArrowUpRight,
+  Play, RefreshCw, Filter, ArrowUpRight,
   Plus, X, Trash2, Globe, FileCheck, Users, CreditCard, Layers
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';

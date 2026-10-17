@@ -8,12 +8,9 @@ import {
   Key,
   FolderGit2,
   Play,
-  FileSearch,
-  Sparkles,
   ExternalLink,
   Loader2,
-  Plus,
-  AlertTriangle
+  Plus
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';
 import './OnboardingWizard.css';
