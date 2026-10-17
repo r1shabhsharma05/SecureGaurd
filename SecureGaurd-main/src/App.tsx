@@ -1,7 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate, useSearchParams } from 'react-router-dom'
 import './index.css'
 import Navbar from './components/Navbar'
-import SecureGuardHero from './components/SecureGuardHero'
+import Hero from './components/Hero'
 import Features from './components/Features'
 import HowItWorks from './components/HowItWorks'
 import Pricing from './components/Pricing'
@@ -18,7 +18,7 @@ function Home() {
     <>
       <Navbar />
       <main>
-        <SecureGuardHero />
+        <Hero />
         <Features />
         <HowItWorks />
         <Pricing />
