@@ -231,13 +231,13 @@ router.get('/tokens', async (req, res) => {
 router.post('/tokens', async (req, res) => {
   const { githubToken, gitlabToken } = req.body;
   try {
-    const data = {};
-    if (githubToken !== undefined) data.githubToken = encrypt(githubToken);
-    if (gitlabToken !== undefined) data.gitlabToken = encrypt(gitlabToken);
+    const tokenUpdates = {};
+    if (githubToken !== undefined) tokenUpdates.githubToken = encrypt(githubToken);
+    if (gitlabToken !== undefined) tokenUpdates.gitlabToken = encrypt(gitlabToken);
 
     await prisma.user.update({
       where: { id: req.userId },
-      data
+      data: tokenUpdates
     });
     res.json({ message: 'Integration tokens successfully updated' });
   } catch (err) {
@@ -278,8 +278,8 @@ router.get('/repos', async (req, res) => {
       if (!response.ok) {
         return res.status(response.status).json({ message: 'Failed fetching repositories from GitHub API' });
       }
-      const data = await response.json();
-      const repos = data.map(r => ({
+      const githubRepos = await response.json();
+      const repos = githubRepos.map(r => ({
         name: r.name,
         fullName: r.full_name,
         url: r.html_url,
@@ -296,8 +296,8 @@ router.get('/repos', async (req, res) => {
       if (!response.ok) {
         return res.status(response.status).json({ message: 'Failed fetching repositories from GitLab API' });
       }
-      const data = await response.json();
-      const repos = data.map(r => ({
+      const gitlabRepos = await response.json();
+      const repos = gitlabRepos.map(r => ({
         name: r.name,
         fullName: r.path_with_namespace,
         url: r.web_url,

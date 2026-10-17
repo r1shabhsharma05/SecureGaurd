@@ -213,8 +213,8 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
           clearTimeout(timeoutId);
 
           if (response.ok) {
-            const data = await response.json();
-            results.push(...(data.results || []));
+            const batchResult = await response.json();
+            results.push(...(batchResult.results || []));
           } else {
             results.push(...Array(chunk.length).fill(null));
           }
@@ -225,9 +225,9 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
       }
 
       const processedSastFindings = sastFindings.map((f, idx) => {
-        const res = results[idx];
-        const pred = res?.prediction || 'REAL';
-        const explanations = res?.explanations || [];
+        const classifierResult = results[idx];
+        const pred = classifierResult?.prediction || 'REAL';
+        const explanations = classifierResult?.explanations || [];
 
         return {
           ...f,

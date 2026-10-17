@@ -15,13 +15,13 @@ async function fetchClassifier(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(`${CLASSIFIER_URL}${path}`, {
+    const classifierResponse = await fetch(`${CLASSIFIER_URL}${path}`, {
       headers: classifierHeaders,
       signal: controller.signal,
       ...options,
     });
     clearTimeout(timeout);
-    return res;
+    return classifierResponse;
   } catch (err) {
     clearTimeout(timeout);
     throw err;
@@ -70,8 +70,8 @@ router.get('/health', async (req, res) => {
   try {
     const response = await fetchClassifier('/health');
     if (response.ok) {
-      const data = await response.json();
-      return res.json({ running: true, ...data });
+      const healthData = await response.json();
+      return res.json({ running: true, ...healthData });
     }
     return res.json({ running: false, status: response.status });
   } catch (err) {
