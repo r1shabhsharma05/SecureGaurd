@@ -24,9 +24,9 @@ export default function Navbar() {
       { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out', delay: 0.2 }
     );
 
-    const onScroll = () => setScrolled(window.scrollY > 50);
-    window.addEventListener('scroll', onScroll);
-    return () => window.removeEventListener('scroll', onScroll);
+    const handleScroll = () => setScrolled(window.scrollY > 50);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
   const handleLogout = async () => {
