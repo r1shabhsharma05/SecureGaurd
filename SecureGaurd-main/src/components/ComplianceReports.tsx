@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
-  FileCheck, Plus, Download, Eye, Trash2, Calendar, Shield,
-  AlertTriangle, CheckCircle2, XCircle, Clock, Search, ChevronRight,
+  FileCheck, Plus, Download, Eye, Trash2, Shield,
+  AlertTriangle, Search,
   RefreshCw, X, Filter, FileText, FileCode, Check
 } from 'lucide-react';
-import { authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import './ComplianceReports.css';
 
