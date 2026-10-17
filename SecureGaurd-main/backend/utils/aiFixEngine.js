@@ -299,7 +299,7 @@ Respond in valid JSON only (no markdown codeblock wrapper):
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  const apiResponse = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -314,10 +314,10 @@ Respond in valid JSON only (no markdown codeblock wrapper):
   });
   clearTimeout(timeoutId);
 
-  if (!res.ok) throw new Error(`web2api error: ${res.status}`);
+  if (!apiResponse.ok) throw new Error(`web2api error: ${apiResponse.status}`);
 
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
+  const responseData = await apiResponse.json();
+  const text = responseData.choices?.[0]?.message?.content || '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('Could not parse web2api JSON response');
 
@@ -368,8 +368,8 @@ Respond in valid JSON only (no markdown):
 
   if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const geminiData = await response.json();
+  const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('Could not parse Gemini response');
 
