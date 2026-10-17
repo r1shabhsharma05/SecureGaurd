@@ -4,13 +4,11 @@ import { apiUrl } from '../config/api';
 export interface InvitationDetails {
   // Invitation payload shape is decided by the backend; keep it loose here
   // so the service stays decoupled from backend internals.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }
 
 export interface AcceptInvitationResponse {
   organization?: { id?: string };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }
 
