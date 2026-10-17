@@ -152,41 +152,6 @@
   fill: currentColor;
 }
 
-.hero-trust {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  opacity: 0;
-}
-
-.trust-label {
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 500;
-}
-
-.trust-logos {
-  display: flex;
-  gap: 1.5rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.trust-logo-item {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 0.95rem;
-  color: rgba(255,255,255,0.3);
-  letter-spacing: -0.02em;
-  transition: color 0.3s;
-}
-
-.trust-logo-item:hover {
-  color: rgba(255,255,255,0.6);
-}
-
 /* --- SCAN CARD --- */
 .hero-visual {
   position: relative;
@@ -487,7 +452,6 @@
   .hero-content { align-items: center; text-align: center; }
   .hero-sub { max-width: 100%; }
   .hero-badge { margin: 0 auto; }
-  .hero-trust { align-items: center; }
   .hero-stats { flex-wrap: wrap; gap: 0; }
   .stat-item { padding: 1rem 1.5rem; }
 }

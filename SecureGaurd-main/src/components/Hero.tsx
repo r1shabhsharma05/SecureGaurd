@@ -29,8 +29,7 @@ export default function Hero() {
     tl.fromTo('.hero-badge', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: 'back.out(1.7)' })
       .fromTo('.hero-headline', { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: 'power3.out' }, '-=0.2')
       .fromTo('.hero-sub', { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.6, ease: 'power3.out' }, '-=0.4')
-      .fromTo('.hero-cta', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out', stagger: 0.1 }, '-=0.3')
-      .fromTo('.hero-trust', { opacity: 0 }, { opacity: 1, duration: 0.6 }, '-=0.2');
+      .fromTo('.hero-cta', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out', stagger: 0.1 }, '-=0.3');
 
     // Scan animation entrance
     gsap.fromTo(scanRef.current,
@@ -113,15 +112,6 @@ export default function Hero() {
               <Play size={14} className="play-icon" />
               Watch Demo
             </motion.a>
-          </div>
-
-          <div className="hero-trust">
-            <span className="trust-label">Trusted by teams at</span>
-            <div className="trust-logos">
-              {['Stripe', 'Vercel', 'Linear', 'Figma'].map(name => (
-                <span key={name} className="trust-logo-item">{name}</span>
-              ))}
-            </div>
           </div>
         </div>
 
