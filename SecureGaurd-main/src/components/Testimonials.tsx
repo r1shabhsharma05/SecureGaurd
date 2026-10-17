@@ -29,7 +29,7 @@ const QUOTES = [
   },
   {
     name: 'Tomas Havel',
-    role: 'Platform Eng @ Supabase',
+    role: 'Platform Engineer',
     avatar: 'TH',
     color: '#f59e0b',
     quote: "I was skeptical about AI security tools, but SecureGuard's context-aware scanning is genuinely impressive. Low noise, high signal.",

@@ -118,7 +118,7 @@ export default function Hero() {
           <div className="hero-trust">
             <span className="trust-label">Trusted by teams at</span>
             <div className="trust-logos">
-              {['Stripe', 'Vercel', 'Linear', 'Supabase', 'Figma'].map(name => (
+              {['Stripe', 'Vercel', 'Linear', 'Figma'].map(name => (
                 <span key={name} className="trust-logo-item">{name}</span>
               ))}
             </div>
