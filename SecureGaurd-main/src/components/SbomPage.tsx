@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Layers, Search, Download, ShieldAlert, CheckCircle, Package,
-  ExternalLink, FileCode, Filter, ChevronRight, Copy, Check, Info, ArrowUpRight
+  FileCode, Copy, Check, Info, ArrowUpRight
 } from 'lucide-react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useNavigate } from 'react-router-dom';

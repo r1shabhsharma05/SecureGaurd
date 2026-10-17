@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Zap, Check, AlertCircle, CreditCard, ExternalLink, RefreshCw } from 'lucide-react';
+import { Check, AlertCircle, CreditCard } from 'lucide-react';
 import './OrganizationSettingsModal.css';
 
 interface Props {
