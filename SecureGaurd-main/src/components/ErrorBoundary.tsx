@@ -21,7 +21,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: unknown, info: unknown): void {
-    // eslint-disable-next-line no-console
     console.error('Unhandled UI error caught by ErrorBoundary:', error, info);
   }
 

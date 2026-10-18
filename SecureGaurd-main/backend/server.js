@@ -17,8 +17,12 @@ const billingRoutes = require('./routes/billing');
 const sbomRoutes = require('./routes/sboms');
 const prisma = require('./prismaClient');
 const { getAllowedOrigins } = require('./config/cors');
+const { validateEnv } = require('./config/env');
 
 dotenv.config();
+
+// Fail fast on missing secrets/config — never run half-configured.
+validateEnv();
 
 const app = express();
 

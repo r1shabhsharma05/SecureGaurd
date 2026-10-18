@@ -1,7 +1,9 @@
 const crypto = require('crypto');
 
 const ALGORITHM = 'aes-256-gcm';
-const SECRET_KEY = process.env.ENCRYPTION_KEY || crypto.createHash('sha256').update(process.env.JWT_SECRET || 'secureguard_secret_key_default').digest();
+// JWT_SECRET is guaranteed present by config/env.js validateEnv() at startup,
+// so the hardcoded default fallback is gone — secrets come from env only.
+const SECRET_KEY = process.env.ENCRYPTION_KEY || crypto.createHash('sha256').update(process.env.JWT_SECRET).digest();
 
 function encrypt(text) {
   if (!text) return text;
