@@ -2,6 +2,18 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
+
+dotenv.config();
+
+const { validateEnv } = require('./config/env');
+
+// Fail fast on missing secrets/config — never run half-configured.
+// NOTE: this MUST run before the route requires below. routes/integration.js
+// -> utils/cryptoUtils.js reads process.env.JWT_SECRET at require time, so a
+// missing JWT_SECRET would otherwise crash with a cryptic TypeError before
+// this clear error ever fires.
+validateEnv();
+
 const authRoutes = require('./routes/auth');
 const repoRoutes = require('./routes/repos');
 const scanRoutes = require('./routes/scans');
@@ -17,12 +29,6 @@ const billingRoutes = require('./routes/billing');
 const sbomRoutes = require('./routes/sboms');
 const prisma = require('./prismaClient');
 const { getAllowedOrigins } = require('./config/cors');
-const { validateEnv } = require('./config/env');
-
-dotenv.config();
-
-// Fail fast on missing secrets/config — never run half-configured.
-validateEnv();
 
 const app = express();
 
