@@ -279,6 +279,13 @@ async function generateAiFix(vulnerability) {
 async function callGeminiWeb2Api(vulnerability, baseUrl) {
   const { title, codeSnippet, filePath, severity } = vulnerability;
 
+  // Fail fast instead of sending a placeholder bearer token — a missing key
+  // must surface as a configuration error, not a silent 401 from the proxy.
+  const web2apiKey = process.env.GEMINI_WEB2API_KEY;
+  if (!web2apiKey) {
+    throw new Error('GEMINI_WEB2API_KEY is not configured; AI fix engine web2api call skipped');
+  }
+
   const prompt = `You are a senior application security engineer. Analyze this ${severity.toUpperCase()} severity vulnerability and provide a production-ready fix.
 
 Vulnerability: ${title}
@@ -303,7 +310,7 @@ Respond in valid JSON only (no markdown codeblock wrapper):
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.GEMINI_WEB2API_KEY || 'sk-gemini'}`
+      'Authorization': `Bearer ${web2apiKey}`
     },
     body: JSON.stringify({
       model: 'gemini-1.5-flash',
