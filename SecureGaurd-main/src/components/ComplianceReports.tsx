@@ -5,6 +5,7 @@ import {
   RefreshCw, X, Filter, FileText, FileCode, Check
 } from 'lucide-react';
 import { useOrganization } from '../context/OrganizationContext';
+import { toErrorMessage } from '../services/ApiError';
 import './ComplianceReports.css';
 
 interface Repository {
@@ -163,8 +164,8 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
         const errData = await res.json();
         setCreateError(errData.message || 'Failed to generate report');
       }
-    } catch (err: any) {
-      setCreateError(err.message || 'Error generating report');
+    } catch (err: unknown) {
+      setCreateError(toErrorMessage(err, 'Error generating report'));
     } finally {
       setGenerating(false);
     }

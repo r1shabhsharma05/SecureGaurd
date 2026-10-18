@@ -94,7 +94,7 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
         setSboms([]);
         setSelectedSbom(null);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load SBOMs:', err);
       setError('Unable to load Software Bill of Materials.');
     } finally {
