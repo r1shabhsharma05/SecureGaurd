@@ -5,5 +5,6 @@
  * calls directly — separation of concerns.
  */
 export * from './apiClient';
+export * from './ApiError';
 export * from './authService';
 export * from './invitationService';

@@ -1,4 +1,5 @@
 import { apiUrl } from '../config/api';
+import { ApiError } from './ApiError';
 
 /**
  * Shared JSON request helper for service-layer API calls.
@@ -28,7 +29,7 @@ export async function apiRequest<T>(
     const message =
       (data as unknown as { message?: string })?.message ||
       `Request to ${path} failed with status ${res.status}`;
-    throw new Error(message);
+    throw new ApiError(res.status, message);
   }
 
   return data;
