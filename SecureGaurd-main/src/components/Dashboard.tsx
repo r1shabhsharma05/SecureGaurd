@@ -16,6 +16,7 @@ import ComplianceReports from './ComplianceReports';
 import SbomPage from './SbomPage';
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
+import { apiUrl } from '../config/api';
 import {
   SEVERITY_FILTER_OPTIONS,
   SCAN_TYPE_FILTER_OPTIONS,
@@ -1380,7 +1381,7 @@ export default function Dashboard() {
                 </button>
               </div>
               <p style={{fontSize:'0.72rem', color:'var(--text-dim)', marginTop:'0.5rem'}}>
-                Webhook URL for auto-scans on push: <code style={{color:'var(--accent-blue)'}}>http://localhost:5000/api/integration/webhook/github</code>
+                Webhook URL for auto-scans on push: <code style={{color:'var(--accent-blue)'}}>{apiUrl('/api/integration/webhook/github')}</code>
               </p>
             </div>
 
@@ -1413,7 +1414,7 @@ export default function Dashboard() {
                 </button>
               </div>
               <p style={{fontSize:'0.72rem', color:'var(--text-dim)', marginTop:'0.5rem'}}>
-                Webhook URL: <code style={{color:'var(--accent-blue)'}}>http://localhost:5000/api/integration/webhook/gitlab</code>
+                Webhook URL: <code style={{color:'var(--accent-blue)'}}>{apiUrl('/api/integration/webhook/gitlab')}</code>
               </p>
             </div>
 
