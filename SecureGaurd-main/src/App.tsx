@@ -12,6 +12,7 @@ import Dashboard from './components/Dashboard'
 import OnboardingWizard from './components/OnboardingWizard'
 import VulnerabilityDetailsPage from './components/VulnerabilityDetailsPage'
 import { AcceptInvitePage } from './components/AcceptInvitePage'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 function Home() {
   return (
@@ -46,15 +47,17 @@ function InviteRouteHandler() {
 function App() {
   return (
     <Router>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
-        <Route path="/login" element={<AuthPage defaultMode="login" />} />
-        <Route path="/onboarding" element={<OnboardingWizard />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
-        <Route path="/accept-invite" element={<InviteRouteHandler />} />
-      </Routes>
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
+          <Route path="/login" element={<AuthPage defaultMode="login" />} />
+          <Route path="/onboarding" element={<OnboardingWizard />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
+          <Route path="/accept-invite" element={<InviteRouteHandler />} />
+        </Routes>
+      </ErrorBoundary>
     </Router>
   )
 }
