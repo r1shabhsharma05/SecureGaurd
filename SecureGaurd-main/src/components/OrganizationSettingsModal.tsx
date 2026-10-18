@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useAuth } from '../context/AuthContext';
 import { Check, AlertCircle, CreditCard } from 'lucide-react';
+import { toErrorMessage } from '../services/ApiError';
 import './OrganizationSettingsModal.css';
 
 interface Props {
@@ -113,8 +114,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
       const res = await inviteMember(inviteEmail.trim(), inviteRole);
       setInviteResult(res);
       setInviteEmail('');
-    } catch (err: any) {
-      setError(err.message || 'Failed to send invitation');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to send invitation'));
     } finally {
       setInviting(false);
     }
@@ -134,8 +135,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
 
     try {
       await updateOrgName(orgNameInput.trim());
-    } catch (err: any) {
-      setError(err.message || 'Failed to update organization name');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to update organization name'));
     } finally {
       setSavingName(false);
     }
@@ -149,8 +150,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     try {
       await deleteOrganization();
       onClose();
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete organization');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to delete organization'));
     } finally {
       setDeleting(false);
     }
@@ -173,8 +174,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
       } else {
         setError(data.message || 'Failed to initiate checkout session');
       }
-    } catch (err: any) {
-      setError(err.message || 'Error starting upgrade checkout');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Error starting upgrade checkout'));
     } finally {
       setCheckoutLoading(null);
     }
@@ -196,8 +197,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
       } else {
         setError(data.message || 'Failed to open billing portal');
       }
-    } catch (err: any) {
-      setError(err.message || 'Error launching billing portal');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Error launching billing portal'));
     } finally {
       setPortalLoading(false);
     }
@@ -221,8 +222,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
         const data = await res.json();
         setError(data.message || 'Failed to cancel subscription');
       }
-    } catch (err: any) {
-      setError(err.message || 'Error canceling subscription');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Error canceling subscription'));
     } finally {
       setCanceling(false);
     }
