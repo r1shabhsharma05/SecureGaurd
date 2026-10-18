@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useOrganization } from '../context/OrganizationContext';
+import { toErrorMessage } from '../services/ApiError';
 import './OrganizationSwitcher.css';
 
 interface Props {
@@ -29,8 +30,8 @@ export const OrganizationSwitcher: React.FC<Props> = ({ onOpenSettings }) => {
       setNewOrgName('');
       setShowCreateModal(false);
       setIsOpen(false);
-    } catch (err: any) {
-      setError(err.message || 'Failed to create workspace');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to create workspace'));
     } finally {
       setCreating(false);
     }

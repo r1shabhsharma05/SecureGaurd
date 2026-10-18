@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import { fetchInvitation, acceptInvitation } from '../services/invitationService';
+import { toErrorMessage } from '../services/ApiError';
 import './AcceptInvitePage.css';
 
 interface Props {
@@ -51,8 +52,8 @@ export const AcceptInvitePage: React.FC<Props> = ({ token, onAccepted, onNavigat
       if (data.organization?.id) {
         setActiveOrgId(data.organization.id);
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to accept invitation');
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to accept invitation'));
     } finally {
       setAccepting(false);
     }
