@@ -146,28 +146,28 @@ export const OnboardingWizard: React.FC = () => {
     }
   }, [accessToken, refreshSession]);
 
-  // Load remote repositories when reaching Step 2
+  // Load remote repositories when reaching Step 2 — fetch defined inside the
+  // effect (single use site) so react-hooks/exhaustive-deps stays satisfied.
   useEffect(() => {
     if (step === 2 && accessToken) {
-      fetchRemoteRepos();
+      const loadRemoteRepos = async () => {
+        setReposLoading(true);
+        setError('');
+        try {
+          const res = await authFetch(`/api/integration/repos?platform=${platform}`, {}, accessToken, refreshSession);
+          if (res.ok) {
+            const data = await res.json();
+            setRemoteRepos(data);
+          }
+        } catch {
+          setError('Could not fetch repositories. You can add a repository manually below.');
+        } finally {
+          setReposLoading(false);
+        }
+      };
+      loadRemoteRepos();
     }
-  }, [step, platform, accessToken]);
-
-  const fetchRemoteRepos = async () => {
-    setReposLoading(true);
-    setError('');
-    try {
-      const res = await authFetch(`/api/integration/repos?platform=${platform}`, {}, accessToken, refreshSession);
-      if (res.ok) {
-        const data = await res.json();
-        setRemoteRepos(data);
-      }
-    } catch {
-      setError('Could not fetch repositories. You can add a repository manually below.');
-    } finally {
-      setReposLoading(false);
-    }
-  };
+  }, [step, platform, accessToken, refreshSession]);
 
   // ── Step 1 Actions: Save PAT ──
   const handleSavePat = async (e: React.FormEvent) => {
