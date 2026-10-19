@@ -36,19 +36,26 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
     setSuccess('');
   }, [defaultMode, location.pathname]);
 
-  // Redirect after successful login based on onboarding status
+  // Redirect after successful login based on onboarding status.
+  // Honors a ?redirect= param (e.g. from an invite link) when it is a safe
+  // same-origin path — protocol-relative or absolute URLs are never followed.
   useEffect(() => {
     if (user && success.includes('Login successful')) {
       const timer = setTimeout(() => {
         if (user.onboardingCompleted) {
-          navigate('/dashboard');
+          const redirect = new URLSearchParams(location.search).get('redirect');
+          if (redirect && redirect.startsWith('/') && !redirect.startsWith('//')) {
+            navigate(redirect);
+          } else {
+            navigate('/dashboard');
+          }
         } else {
           navigate('/onboarding');
         }
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [user, success, navigate]);
+  }, [user, success, navigate, location.search]);
 
   // ── Login / Register ────────────────────────────────────────────────────────
   const handleAuthSubmit = async (e: React.FormEvent) => {
