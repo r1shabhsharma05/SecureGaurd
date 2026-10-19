@@ -22,24 +22,27 @@
 
 .section-eyebrow {
   display: inline-block;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-main);
-  margin-bottom: 1.25rem;
+  margin-bottom: 1.5rem;
   background: #09090B;
   border: 1px solid var(--border-color);
-  padding: 0.4rem 1rem;
-  border-radius: var(--radius-sm);
+  padding: 0.55rem 1.25rem;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 .section-title {
-  font-size: clamp(2rem, 4vw, 3rem);
+  font-size: clamp(2.5rem, 5vw, 3.75rem);
   font-weight: 800;
-  margin: 0.75rem 0 1rem;
-  line-height: 1.15;
+  margin: 0.75rem 0 1.25rem;
+  line-height: 1.1;
   letter-spacing: -0.04em;
+  text-wrap: balance;
+  overflow-wrap: break-word;
 }
 
 .section-sub {
