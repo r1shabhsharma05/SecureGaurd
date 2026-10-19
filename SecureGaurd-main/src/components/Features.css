@@ -22,25 +22,25 @@
 
 .landing-section-eyebrow {
   display: inline-block;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-main);
   margin-bottom: 1.5rem;
   background: #09090B;
   border: 1px solid var(--border-color);
-  padding: 0.55rem 1.25rem;
+  padding: 0.6rem 1.4rem;
   border-radius: 999px;
   white-space: nowrap;
 }
 
 .landing-section-title {
-  font-size: clamp(2.5rem, 5vw, 3.75rem);
+  font-size: clamp(2rem, 4vw, 2.75rem);
   font-weight: 800;
   margin: 0.75rem 0 1.25rem;
-  line-height: 1.1;
-  letter-spacing: -0.04em;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
   text-wrap: balance;
   overflow-wrap: break-word;
 }
