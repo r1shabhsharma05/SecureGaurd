@@ -199,7 +199,9 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     await fetchOrganizations();
   };
 
-  const fetchMembers = async () => {
+  // Memoized (referentially stable) so consumers can list these in effect
+  // dependency arrays without re-running effects on every render.
+  const fetchMembers = useCallback(async () => {
     if (!activeOrg) return;
     try {
       const res = await orgFetch(`/api/organizations/${activeOrg.id}/members`);
@@ -210,7 +212,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     } catch (err) {
       console.error('Failed to fetch members:', err);
     }
-  };
+  }, [activeOrg, orgFetch]);
 
   const updateMemberRole = async (memberId: number, role: string) => {
     if (!activeOrg) return;
@@ -237,7 +239,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     await fetchMembers();
   };
 
-  const fetchInvitations = async () => {
+  const fetchInvitations = useCallback(async () => {
     if (!activeOrg || (activeRole !== 'OWNER' && activeRole !== 'ADMIN')) return;
     try {
       const res = await orgFetch(`/api/organizations/${activeOrg.id}/invitations`);
@@ -248,7 +250,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     } catch (err) {
       console.error('Failed to fetch invitations:', err);
     }
-  };
+  }, [activeOrg, activeRole, orgFetch]);
 
   const inviteMember = async (email: string, role: string) => {
     if (!activeOrg) throw new Error('No active organization');
@@ -276,7 +278,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     await fetchInvitations();
   };
 
-  const fetchAuditLogs = async () => {
+  const fetchAuditLogs = useCallback(async () => {
     if (!activeOrg || (activeRole !== 'OWNER' && activeRole !== 'ADMIN')) return;
     try {
       const res = await orgFetch(`/api/organizations/${activeOrg.id}/audit-logs`);
@@ -287,7 +289,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     } catch (err) {
       console.error('Failed to fetch audit logs:', err);
     }
-  };
+  }, [activeOrg, activeRole, orgFetch]);
 
   return (
     <OrganizationContext.Provider

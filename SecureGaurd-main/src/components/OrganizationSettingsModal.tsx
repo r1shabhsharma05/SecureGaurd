@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useAuth } from '../context/AuthContext';
 import { Check, AlertCircle, CreditCard } from 'lucide-react';
@@ -70,7 +70,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
   const [deleting, setDeleting] = useState(false);
 
-  const fetchBillingUsage = async () => {
+  // Memoized so the load effect can safely list it as a dependency (react-hooks/exhaustive-deps)
+  const fetchBillingUsage = useCallback(async () => {
     setLoadingBilling(true);
     try {
       const res = await orgFetch('/api/billing/usage');
@@ -83,7 +84,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     } finally {
       setLoadingBilling(false);
     }
-  };
+  }, [orgFetch]);
 
   useEffect(() => {
     if (isOpen && activeOrg) {
@@ -96,7 +97,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
         fetchAuditLogs();
       }
     }
-  }, [isOpen, activeOrg, activeRole, initialTab]);
+  }, [isOpen, activeOrg, activeRole, initialTab, fetchMembers, fetchBillingUsage, fetchInvitations, fetchAuditLogs]);
 
   if (!isOpen || !activeOrg) return null;
 
