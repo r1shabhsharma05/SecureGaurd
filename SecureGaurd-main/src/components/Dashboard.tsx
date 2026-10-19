@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield, LayoutDashboard, GitBranch, Search,
@@ -167,7 +167,8 @@ export default function Dashboard() {
   }, [user, navigate]);
 
   // Fetch initial repositories and stats whenever activeOrgId or token changes
-  const fetchData = async () => {
+  // Memoized so effects can safely list it as a dependency (react-hooks/exhaustive-deps)
+  const fetchData = useCallback(async () => {
     if (!accessToken) return;
     try {
       // 1. Fetch repositories
@@ -231,13 +232,13 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
     }
-  };
+  }, [accessToken, orgFetch]);
 
   useEffect(() => {
     if (accessToken && activeOrgId) {
       fetchData();
     }
-  }, [accessToken, activeOrgId]);
+  }, [accessToken, activeOrgId, fetchData]);
 
   const handleSaveTokens = async (platform: 'github' | 'gitlab', tokenValue: string) => {
     if (!accessToken) return;
@@ -267,7 +268,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchRemoteRepos = async (platform: 'github' | 'gitlab') => {
+  const fetchRemoteRepos = useCallback(async (platform: 'github' | 'gitlab') => {
     if (!accessToken) return;
     setLoadingRemote(true);
     setRemoteRepos([]);
@@ -282,13 +283,13 @@ export default function Dashboard() {
     } finally {
       setLoadingRemote(false);
     }
-  };
+  }, [accessToken, orgFetch]);
 
   useEffect(() => {
     if (user && accessToken && activeOrgId) {
       fetchData();
     }
-  }, [user, accessToken, activeOrgId]);
+  }, [user, accessToken, activeOrgId, fetchData]);
 
   useEffect(() => {
     if (isConnectModalOpen && (newRepoPlatform === 'github' || newRepoPlatform === 'gitlab')) {
@@ -301,7 +302,7 @@ export default function Dashboard() {
     } else {
       setRemoteRepos([]);
     }
-  }, [isConnectModalOpen, newRepoPlatform, hasGithubToken, hasGitlabToken]);
+  }, [isConnectModalOpen, newRepoPlatform, hasGithubToken, hasGitlabToken, fetchRemoteRepos]);
 
   // Seed default repository if none connected in active organization
   useEffect(() => {
@@ -325,7 +326,7 @@ export default function Dashboard() {
       }
     };
     seedDefaultRepo();
-  }, [repos, user, accessToken, activeOrgId]);
+  }, [repos, user, accessToken, activeOrgId, fetchData, orgFetch]);
 
   const handleLogout = async () => {
     await logout();
