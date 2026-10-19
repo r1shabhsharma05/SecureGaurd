@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Layers, Search, Download, ShieldAlert, CheckCircle, Package,
   FileCode, Copy, Check, Info, ArrowUpRight
@@ -67,11 +67,20 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
   // Detail Modal
   const [activeComponent, setActiveComponent] = useState<any | null>(null);
 
-  useEffect(() => {
-    fetchSboms();
-  }, [activeOrgId, selectedRepoId]);
+  // Memoized so the load effect can safely list them as dependencies (react-hooks/exhaustive-deps)
+  const fetchSbomDetails = useCallback(async (id: number) => {
+    try {
+      const res = await orgFetch(`/api/sboms/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedSbom(data);
+      }
+    } catch (err) {
+      console.error('Error fetching SBOM detail:', err);
+    }
+  }, [orgFetch]);
 
-  const fetchSboms = async () => {
+  const fetchSboms = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -100,19 +109,11 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedRepoId, orgFetch, fetchSbomDetails]);
 
-  const fetchSbomDetails = async (id: number) => {
-    try {
-      const res = await orgFetch(`/api/sboms/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedSbom(data);
-      }
-    } catch (err) {
-      console.error('Error fetching SBOM detail:', err);
-    }
-  };
+  useEffect(() => {
+    fetchSboms();
+  }, [activeOrgId, fetchSboms]);
 
   const handleDownloadSpdx = async () => {
     if (!selectedSbom) return;
