@@ -39,7 +39,7 @@ function InviteRouteHandler() {
     <AcceptInvitePage
       token={token}
       onAccepted={() => navigate('/dashboard')}
-      onNavigateAuth={() => navigate(`/login?redirect=/accept-invite?token=${token}`)}
+      onNavigateAuth={() => navigate(`/login?redirect=${encodeURIComponent(`/accept-invite?token=${token}`)}`)}
     />
   );
 }
