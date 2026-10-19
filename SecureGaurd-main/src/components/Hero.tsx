@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, useInView, animate } from 'framer-motion';
 import { gsap } from 'gsap';
 import { Shield, ArrowRight, Play } from 'lucide-react';
 import './Hero.css';
@@ -19,6 +19,40 @@ const BADGE_VARIANTS = {
   hidden: { opacity: 0, y: 20 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' } },
 };
+
+// Animated count-up: 0 → target with easeOutExpo when scrolled into view
+function CountUp({ to, decimals = 0, prefix = '', suffix = '', duration = 1.8 }: {
+  to: number; decimals?: number; prefix?: string; suffix?: string; duration?: number;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const inView = useInView(ref, { once: true, margin: '-40px' });
+  const [val, setVal] = useState(0);
+
+  useEffect(() => {
+    if (!inView) return;
+    const controls = animate(0, to, {
+      duration,
+      ease: [0.16, 1, 0.3, 1],
+      onUpdate: (v: number) => setVal(v),
+    });
+    return () => controls.stop();
+  }, [inView, to, duration]);
+
+  return (
+    <span ref={ref}>
+      {prefix}
+      {val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
+      {suffix}
+    </span>
+  );
+}
+
+const STATS: { to: number; decimals?: number; prefix?: string; suffix?: string; lbl: string }[] = [
+  { to: 10, suffix: 'M+', lbl: 'Vulnerabilities Found' },
+  { to: 50, suffix: 'K+', lbl: 'Repos Protected' },
+  { to: 99.9, decimals: 1, suffix: '%', lbl: 'Uptime SLA' },
+  { to: 50, prefix: '<', suffix: 'ms', lbl: 'Avg Scan Time' },
+];
 
 export default function Hero() {
   const lineRef = useRef(null);
@@ -206,14 +240,16 @@ export default function Hero() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 2.2, duration: 0.6 }}
       >
-        {[
-          { val: '10M+', lbl: 'Vulnerabilities Found' },
-          { val: '50K+', lbl: 'Repos Protected' },
-          { val: '99.9%', lbl: 'Uptime SLA' },
-          { val: '<50ms', lbl: 'Avg Scan Time' },
-        ].map(s => (
+        {STATS.map(s => (
           <div key={s.lbl} className="stat-item">
-            <span className="stat-value">{s.val}</span>
+            <span className="stat-value">
+              <CountUp
+                to={s.to}
+                decimals={s.decimals ?? 0}
+                prefix={s.prefix ?? ''}
+                suffix={s.suffix ?? ''}
+              />
+            </span>
             <span className="stat-label">{s.lbl}</span>
           </div>
         ))}
