@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileCheck, Plus, Download, Eye, Trash2, Shield,
   AlertTriangle, Search,
@@ -107,9 +107,10 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
     if (repos.length > 0 && selectedRepoId === '') {
       setSelectedRepoId(repos[0].id);
     }
-  }, [repos]);
+  }, [repos, selectedRepoId]);
 
-  const fetchReports = async () => {
+  // Memoized so the fetch effect can safely list it as a dependency (react-hooks/exhaustive-deps)
+  const fetchReports = useCallback(async () => {
     if (!accessToken) return;
     setLoading(true);
     try {
@@ -123,13 +124,13 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
     } finally {
       setLoading(false);
     }
-  };
+  }, [accessToken, orgFetch]);
 
   useEffect(() => {
     if (accessToken && activeOrgId) {
       fetchReports();
     }
-  }, [accessToken, activeOrgId]);
+  }, [accessToken, activeOrgId, fetchReports]);
 
   const handleGenerateReport = async (e: React.FormEvent) => {
     e.preventDefault();
