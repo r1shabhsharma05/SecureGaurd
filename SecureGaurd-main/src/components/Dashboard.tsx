@@ -234,11 +234,7 @@ export default function Dashboard() {
     }
   }, [accessToken, orgFetch]);
 
-  useEffect(() => {
-    if (accessToken && activeOrgId) {
-      fetchData();
-    }
-  }, [accessToken, activeOrgId, fetchData]);
+  // (Initial data load is handled by the effect below, which also waits for user.)
 
   const handleSaveTokens = async (platform: 'github' | 'gitlab', tokenValue: string) => {
     if (!accessToken) return;
