@@ -72,12 +72,12 @@ export default function Features() {
     <section id="features" className="features-section section-padding" ref={sectionRef}>
       <div className="container">
         <div className="features-header">
-          <span className="section-eyebrow">Why SecureGuard</span>
-          <h2 className="section-title">
+          <span className="landing-section-eyebrow">Why SecureGuard</span>
+          <h2 className="landing-section-title">
             Security That Works<br />
             <span className="text-gradient">At the Speed of Code</span>
           </h2>
-          <p className="section-sub">
+          <p className="landing-section-sub">
             Stop chasing vulnerabilities after the fact. SecureGuard integrates directly into
             your workflow so security is never an afterthought.
           </p>

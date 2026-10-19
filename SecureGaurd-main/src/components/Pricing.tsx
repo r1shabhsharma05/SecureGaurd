@@ -78,12 +78,12 @@ export default function Pricing() {
     <section id="pricing" className="pricing-section section-padding">
       <div className="container">
         <div className="pricing-header">
-          <span className="section-eyebrow">Pricing</span>
-          <h2 className="section-title">
+          <span className="landing-section-eyebrow">Pricing</span>
+          <h2 className="landing-section-title">
             Simple, Transparent<br />
             <span className="text-gradient">Pricing for Every Team</span>
           </h2>
-          <p className="section-sub">
+          <p className="landing-section-sub">
             Start free. Scale as you grow. No hidden fees, no vendor lock-in.
           </p>
         </div>

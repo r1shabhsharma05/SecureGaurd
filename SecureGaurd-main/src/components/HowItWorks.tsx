@@ -71,8 +71,8 @@ export default function HowItWorks() {
     <section id="how-it-works" className="how-section section-padding">
       <div className="container">
         <div className="how-header">
-          <span className="section-eyebrow">Simple by Design</span>
-          <h2 className="section-title">
+          <span className="landing-section-eyebrow">Simple by Design</span>
+          <h2 className="landing-section-title">
             From Zero to<br />
             <span className="text-gradient">Fully Secured in 4 Steps</span>
           </h2>
