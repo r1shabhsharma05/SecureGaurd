@@ -40,15 +40,19 @@ function generateRefreshToken(userId) {
 function setRefreshCookie(res, token) {
   res.cookie('sg_refresh', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // Cross-origin: frontend (Vercel) and backend (Render) are different sites,
+    // so the cookie must be SameSite=None (Lax is never sent on cross-site fetch).
+    // SameSite=None requires Secure; localhost counts as a secure context.
+    secure: true,
+    sameSite: 'none',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
     path: '/api/auth',
   });
 }
 
 function clearRefreshCookie(res) {
-  res.clearCookie('sg_refresh', { path: '/api/auth' });
+  // Attributes must match the cookie being cleared, otherwise the browser keeps it.
+  res.clearCookie('sg_refresh', { path: '/api/auth', sameSite: 'none', secure: true });
 }
 
 // ── POST /api/auth/register ───────────────────────────────────────────────────
