@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- macOS-style arrow: white outline underneath, black fill on top -->
+  <path d="M6 3 L6 17.5 L10.7 13.3 L13.1 18.6 L15.7 17.4 L13.3 12.1 L18.6 12.1 Z"
+        fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linejoin="round"/>
+  <path d="M6 3 L6 17.5 L10.7 13.3 L13.1 18.6 L15.7 17.4 L13.3 12.1 L18.6 12.1 Z"
+        fill="#0d0d0d"/>
+</svg>

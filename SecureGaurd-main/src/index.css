@@ -31,7 +31,7 @@
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  cursor: url('/cursors/Normal.png'), auto;
+  cursor: url('/cursors/arrow.svg') 6 3, auto;
 }
 
 body {
@@ -43,11 +43,11 @@ body {
 }
 
 a, button, [role="button"] {
-  cursor: url('/cursors/Link.png'), pointer !important;
+  cursor: url('/cursors/hand.svg') 11 3, pointer !important;
 }
 
 input, textarea {
-  cursor: url('/cursors/Text.png'), text !important;
+  cursor: url('/cursors/text.svg') 12 12, text !important;
 }
 
 h1, h2, h3, h4, h5, h6 {
