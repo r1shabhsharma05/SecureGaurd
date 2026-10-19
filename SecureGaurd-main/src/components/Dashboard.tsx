@@ -101,7 +101,7 @@ function StatusBadge({ s }: { s: string }) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { user, accessToken, refreshSession, logout } = useAuth();
+  const { user, accessToken, loading: authLoading, refreshSession, logout } = useAuth();
   const { activeOrg, activeOrgId, activeRole, orgFetch } = useOrganization();
   
   // Navigation
@@ -157,14 +157,18 @@ export default function Dashboard() {
   const [isFullDetailOpen, setIsFullDetailOpen] = useState(false);
   const [fullDetailVuln, setFullDetailVuln] = useState<any | null>(null);
 
-  // Guard — redirect if not authenticated or onboarding incomplete
+  // Guard — redirect if not authenticated or onboarding incomplete.
+  // Wait for the AuthContext session-restore check first: on a page refresh
+  // user starts as null while /me is still in flight; redirecting on that
+  // would log the user out on every refresh.
   useEffect(() => {
+    if (authLoading) return;
     if (!user) {
       navigate('/login');
     } else if (user.onboardingCompleted === false) {
       navigate('/onboarding');
     }
-  }, [user, navigate]);
+  }, [user, authLoading, navigate]);
 
   // Fetch initial repositories and stats whenever activeOrgId or token changes
   // Memoized so effects can safely list it as a dependency (react-hooks/exhaustive-deps)
