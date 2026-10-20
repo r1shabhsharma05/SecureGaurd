@@ -22,10 +22,26 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GridSearchCV
 from xgboost import XGBClassifier
+import argparse
+import os
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="SecureGuard FP Classifier training pipeline")
+    parser.add_argument("--data", default=os.path.join(BASE_DIR, "sample_findings.csv"),
+                        help="Path to the labeled findings CSV (default: sample_findings.csv next to this script)")
+    parser.add_argument("--out-dir", default=BASE_DIR,
+                        help="Directory to write model.joblib and the encoders (default: script directory)")
+    return parser.parse_args()
+
+ARGS = parse_args()
+os.makedirs(ARGS.out_dir, exist_ok=True)
 
 # ---------- 1. Load data ----------
-df = pd.read_csv("/home/claude/fp_classifier/data/sample_findings.csv")
-print(f"Loaded {len(df)} labeled findings\n")
+df = pd.read_csv(ARGS.data)
+print(f"Loaded {len(df)} labeled findings from {ARGS.data}\n")
 
 # ---------- 2. Encode categorical features ----------
 # Model numbers samajhta hai, text nahi -> rule_id/cwe_id ko numbers me convert karo
@@ -105,7 +121,7 @@ print("===== FEATURE IMPORTANCE (model ne kis feature ko sabse zyada weight diya
 print(importances)
 
 # ---------- 7. Save model + encoders ----------
-joblib.dump(model, "/home/claude/fp_classifier/model.joblib")
-joblib.dump(rule_encoder, "/home/claude/fp_classifier/rule_encoder.joblib")
-joblib.dump(cwe_encoder, "/home/claude/fp_classifier/cwe_encoder.joblib")
-print("\nModel saved to model.joblib")
+joblib.dump(model, os.path.join(ARGS.out_dir, "model.joblib"))
+joblib.dump(rule_encoder, os.path.join(ARGS.out_dir, "rule_encoder.joblib"))
+joblib.dump(cwe_encoder, os.path.join(ARGS.out_dir, "cwe_encoder.joblib"))
+print(f"\nModel saved to {os.path.join(ARGS.out_dir, 'model.joblib')}")

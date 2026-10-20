@@ -13,11 +13,23 @@ Abhi hum sirf PIPELINE dikhane ke liye synthetic data bana rahe hain.
 import pandas as pd
 import numpy as np
 import random
+import argparse
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate synthetic SAST findings for classifier training")
+    parser.add_argument("--out", default=os.path.join(BASE_DIR, "sample_findings.csv"),
+                        help="Where to write the generated CSV (default: sample_findings.csv next to this script)")
+    parser.add_argument("--n", type=int, default=8000, help="Number of synthetic rows to generate")
+    return parser.parse_args()
+
+ARGS = parse_args()
+N_SAMPLES = ARGS.n
 
 random.seed(42)
 np.random.seed(42)
-
-N_SAMPLES = 8000
 
 rows = []
 rule_ids = ["sqli-concat", "xss-unescaped", "hardcoded-secret", "path-traversal", "ssrf-request", "insecure-deserialize"]
@@ -93,7 +105,7 @@ for _ in range(N_SAMPLES):
     })
 
 df = pd.DataFrame(rows)
-df.to_csv("/home/claude/fp_classifier/data/sample_findings.csv", index=False)
-print(f"Generated {len(df)} rows")
+df.to_csv(ARGS.out, index=False)
+print(f"Generated {len(df)} rows -> {ARGS.out}")
 print(df["label"].value_counts(normalize=True))
 print(df.head())
