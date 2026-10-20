@@ -23,6 +23,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 METADATA_JSON = os.path.join(BASE_DIR, "model_metadata.json")
 LOG_PATH = os.path.join(BASE_DIR, "predictions.log")
 
+# ─── Version ─────────────────────────────────────────────────────────────────
+# Bump on service behavior/contract changes. The *model* version (which
+# training run produced the weights) is separate and comes from
+# model_metadata.json written by retrain.py.
+SERVICE_VERSION = "2.1.0"
+
+def get_model_version() -> str:
+    """Active model version from training metadata; 'v1_synthetic' before the first retrain."""
+    try:
+        with open(METADATA_JSON, "r", encoding="utf-8") as f:
+            return json.load(f).get("version", "v1_synthetic")
+    except (OSError, ValueError):
+        return "v1_synthetic"
+
 # ─── Load API Key from env or .env file ───────────────────────────────────────
 CLASSIFIER_API_KEY = os.environ.get("CLASSIFIER_API_KEY")
 if not CLASSIFIER_API_KEY:
@@ -62,7 +76,7 @@ async def lifespan(app: FastAPI):
 # ─── App Setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="SecureGuard FP Suppression Classifier",
-    version="2.0.0",
+    version=SERVICE_VERSION,
     description="ML-powered False Positive suppression for SAST findings",
     lifespan=lifespan,
 )
@@ -136,11 +150,13 @@ class BatchRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    """Basic health check — no auth required"""
+    """Health check — no auth required. Reports service + model versions."""
     return {
         "status": "ok",
         "service": "SecureGuard FP Classifier",
-        "version": "2.0.0",
+        "version": SERVICE_VERSION,
+        "model_version": get_model_version(),
+        "model_loaded": os.path.exists(os.path.join(BASE_DIR, "model.joblib")),
         "timestamp": datetime.datetime.now().isoformat()
     }
 
