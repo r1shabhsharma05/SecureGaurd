@@ -70,6 +70,15 @@ def main():
 
     X = df[FEATURE_COLS]
     y = df["label"]
+
+    # Class imbalance: the data skews toward FALSE_POSITIVE, which biases the
+    # model against predicting REAL — the worse error for a security tool.
+    # scale_pos_weight rebalances the loss toward the minority (REAL) class.
+    # Computed from the actual label distribution, not hardcoded.
+    n_real = int((y == 1).sum())
+    n_fp = int((y == 0).sum())
+    scale_pos_weight = (n_fp / n_real) if n_real else 1.0
+    print(f"Class balance: {n_real} REAL / {n_fp} FP -> scale_pos_weight={scale_pos_weight:.3f}")
     
     # 3. Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -83,6 +92,7 @@ def main():
         learning_rate=0.1,
         min_child_weight=1,
         subsample=0.8,
+        scale_pos_weight=scale_pos_weight,
         eval_metric="logloss",
         random_state=42
     )
