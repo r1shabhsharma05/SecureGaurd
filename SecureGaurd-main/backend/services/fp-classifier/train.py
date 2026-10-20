@@ -25,6 +25,7 @@ from xgboost import XGBClassifier
 import argparse
 import os
 
+from feature_schema import FEATURE_COLS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,17 +51,7 @@ cwe_encoder = LabelEncoder()
 df["rule_id_enc"] = rule_encoder.fit_transform(df["rule_id"])
 df["cwe_id_enc"] = cwe_encoder.fit_transform(df["cwe_id"])
 
-feature_cols = [
-    "rule_id_enc", "cwe_id_enc", "is_string_concat", "is_parameterized_query",
-    "has_sanitizer_nearby", "in_test_file", "is_in_vendor_or_generated_dir",
-    "taint_source_distance", "function_complexity", "code_snippet_length",
-    "variable_name_entropy", "is_user_input_direct", "has_type_validation",
-    "is_third_party_lib_call", "same_finding_seen_before_count",
-    "developer_dismissed_similar_before", "file_change_frequency",
-    "is_authenticated_endpoint",
-]
-
-X = df[feature_cols]
+X = df[FEATURE_COLS]
 y = df["label"]
 
 # ---------- 3. Train/test split ----------
@@ -116,7 +107,7 @@ print()
 print(classification_report(y_test, y_pred, target_names=["FALSE_POSITIVE", "REAL"]))
 
 # ---------- 6. Feature importance (model ne kya important samjha) ----------
-importances = pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False)
+importances = pd.Series(model.feature_importances_, index=FEATURE_COLS).sort_values(ascending=False)
 print("===== FEATURE IMPORTANCE (model ne kis feature ko sabse zyada weight diya) =====")
 print(importances)
 

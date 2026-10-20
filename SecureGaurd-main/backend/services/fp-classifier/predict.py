@@ -12,6 +12,8 @@ import json
 import joblib
 import pandas as pd
 
+from feature_schema import FEATURE_COLS, safe_encode
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 model = joblib.load(os.path.join(BASE_DIR, "model.joblib"))
 rule_encoder = joblib.load(os.path.join(BASE_DIR, "rule_encoder.joblib"))
@@ -44,25 +46,6 @@ def get_threshold_for_cwe(cwe_id: str) -> float:
     if not USE_CONFORMAL:
         return FIXED_THRESHOLD
     return CONFORMAL_PER_CWE.get(cwe_id, CONFORMAL_DEFAULT)
-
-
-# NOTE: ye list generate_sample_data.py / train.py ke feature_cols se exactly match honi chahiye
-feature_cols = [
-    "rule_id_enc", "cwe_id_enc", "is_string_concat", "is_parameterized_query",
-    "has_sanitizer_nearby", "in_test_file", "is_in_vendor_or_generated_dir",
-    "taint_source_distance", "function_complexity", "code_snippet_length",
-    "variable_name_entropy", "is_user_input_direct", "has_type_validation",
-    "is_third_party_lib_call", "same_finding_seen_before_count",
-    "developer_dismissed_similar_before", "file_change_frequency",
-    "is_authenticated_endpoint",
-]
-
-# Unseen rule_id/cwe_id encoder me na ho to crash na ho, isliye safe fallback
-def safe_encode(encoder, value):
-    try:
-        return encoder.transform([value])[0]
-    except ValueError:
-        return -1  # unknown category ke liye fallback code
 
 
 def explain_prediction(finding: dict, prediction: str) -> list[str]:
@@ -116,7 +99,7 @@ def predict_finding(finding: dict, include_explanation: bool = False) -> dict:
     row["rule_id_enc"] = safe_encode(rule_encoder, row["rule_id"])
     row["cwe_id_enc"] = safe_encode(cwe_encoder, row["cwe_id"])
 
-    X = pd.DataFrame([row])[feature_cols]
+    X = pd.DataFrame([row])[FEATURE_COLS]
     proba = model.predict_proba(X)[0][1]  # probability of being REAL
 
     # Conformal per-CWE threshold (or fixed fallback)

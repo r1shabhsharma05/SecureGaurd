@@ -18,6 +18,8 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
+from feature_schema import FEATURE_COLS, safe_encode_series
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLE_FINDINGS_CSV = os.path.join(BASE_DIR, "sample_findings.csv")
 SYNTHETIC_FINDINGS_CSV = os.path.join(BASE_DIR, "synthetic_findings.csv")
@@ -25,16 +27,6 @@ METADATA_JSON = os.path.join(BASE_DIR, "model_metadata.json")
 ARCHIVE_DIR = os.path.join(BASE_DIR, "models_archive")
 
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
-
-def safe_transform(encoder, series):
-    classes = set(encoder.classes_)
-    res = []
-    for val in series:
-        if val in classes:
-            res.append(encoder.transform([val])[0])
-        else:
-            res.append(-1)
-    return res
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SecureGuard FP Classifier Retraining Pipeline")
@@ -75,18 +67,8 @@ def main():
     
     df["rule_id_enc"] = rule_encoder.fit_transform(df["rule_id"].astype(str))
     df["cwe_id_enc"] = cwe_encoder.fit_transform(df["cwe_id"].astype(str))
-    
-    feature_cols = [
-        "rule_id_enc", "cwe_id_enc", "is_string_concat", "is_parameterized_query",
-        "has_sanitizer_nearby", "in_test_file", "is_in_vendor_or_generated_dir",
-        "taint_source_distance", "function_complexity", "code_snippet_length",
-        "variable_name_entropy", "is_user_input_direct", "has_type_validation",
-        "is_third_party_lib_call", "same_finding_seen_before_count",
-        "developer_dismissed_similar_before", "file_change_frequency",
-        "is_authenticated_endpoint",
-    ]
-    
-    X = df[feature_cols]
+
+    X = df[FEATURE_COLS]
     y = df["label"]
     
     # 3. Train/test split
@@ -135,8 +117,8 @@ def main():
             orig_rule_ids = df.loc[X_test.index, "rule_id"].astype(str)
             orig_cwe_ids = df.loc[X_test.index, "cwe_id"].astype(str)
             
-            X_test_old["rule_id_enc"] = safe_transform(old_rule_enc, orig_rule_ids)
-            X_test_old["cwe_id_enc"] = safe_transform(old_cwe_enc, orig_cwe_ids)
+            X_test_old["rule_id_enc"] = safe_encode_series(old_rule_enc, orig_rule_ids)
+            X_test_old["cwe_id_enc"] = safe_encode_series(old_cwe_enc, orig_cwe_ids)
             
             y_pred_old = old_model.predict(X_test_old)
             old_acc = accuracy_score(y_test, y_pred_old)
