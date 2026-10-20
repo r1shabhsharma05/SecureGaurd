@@ -235,7 +235,9 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
           mlFeatures: {
             ...f.mlFeatures,
             ml_prediction: pred,
-            ml_confidence: res ? res.confidence : 1.0,
+            // classifierResult is null when the classifier was unreachable or timed
+            // out; keep the 1.0 fail-safe confidence in that case.
+            ml_confidence: classifierResult?.confidence ?? 1.0,
             ml_explanation: explanations
           }
         };
