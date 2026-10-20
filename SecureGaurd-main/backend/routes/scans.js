@@ -5,7 +5,33 @@ const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
 const { checkCanTriggerScan } = require('../services/billingService');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { runSecurityScan } = require('../utils/securityScanner');
+
+// ─── ML feature: file change frequency from git history ─────────────────────
+// The FP classifier was trained with file_change_frequency in 0..50
+// (see backend/services/fp-classifier/generate_sample_data.py), but scans used
+// to send a hardcoded 0, making the feature dead weight in production. Counting
+// commits via `git log` keeps production inputs in-distribution. Falls back to
+// 0 when git is unavailable or the scan target is not a git checkout.
+const MAX_FILE_CHANGE_FREQUENCY = 50;
+function getFileChangeFrequency(scanRoot, relFilePath, cache) {
+  const cacheKey = `${scanRoot}::${relFilePath}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  let count = 0;
+  try {
+    const out = execFileSync('git', ['-C', scanRoot, 'log', '--format=%H', '--', relFilePath], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    count = Math.min(out.split('\n').filter(Boolean).length, MAX_FILE_CHANGE_FREQUENCY);
+  } catch (err) {
+    count = 0;
+  }
+  cache.set(cacheKey, count);
+  return count;
+}
 
 // GET /api/scans/export-feedback — export all user feedback labels for retraining
 router.get('/export-feedback', async (req, res, next) => {
@@ -146,6 +172,9 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
     // Execute real security scan
     const scanResult = runSecurityScan(scanPath);
 
+    // Per-scan cache for git-based file change frequency lookups
+    const freqCache = new Map();
+
     // Append ML Features
     for (let finding of scanResult.findings) {
       if (finding.mlFeatures) {
@@ -166,7 +195,7 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
           }
         });
         finding.mlFeatures.developer_dismissed_similar_before = dismissedCount;
-        finding.mlFeatures.file_change_frequency = 0;
+        finding.mlFeatures.file_change_frequency = getFileChangeFrequency(scanPath, finding.filePath, freqCache);
 
         const RULE_MAP = {
           'SAST-001': 'sqli-concat',
