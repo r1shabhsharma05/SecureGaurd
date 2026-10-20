@@ -16,7 +16,7 @@ import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from predict import predict_finding
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -103,28 +103,34 @@ def log_prediction(finding_dict: dict, result_dict: dict):
         print(f"[Log Error] {e}")
 
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
+# Range validation keeps out-of-distribution / malformed inputs from reaching
+# the model (e.g. a negative taint distance or a 2 in a 0/1 flag would
+# silently skew the prediction). Violations return 422 before predict_finding
+# runs; the Node.js caller treats non-2xx as fail-safe REAL.
 class Finding(BaseModel):
-    rule_id: str
-    cwe_id: str
-    is_string_concat: int
-    is_parameterized_query: int
-    has_sanitizer_nearby: int
-    in_test_file: int
-    is_in_vendor_or_generated_dir: int
-    taint_source_distance: int
-    function_complexity: int
-    code_snippet_length: int
-    variable_name_entropy: float
-    is_user_input_direct: int
-    has_type_validation: int
-    is_third_party_lib_call: int
-    same_finding_seen_before_count: int
-    developer_dismissed_similar_before: int
-    file_change_frequency: int
-    is_authenticated_endpoint: int
+    rule_id: str = Field(min_length=1, max_length=128)
+    cwe_id: str = Field(min_length=1, max_length=64)
+    is_string_concat: int = Field(ge=0, le=1)
+    is_parameterized_query: int = Field(ge=0, le=1)
+    has_sanitizer_nearby: int = Field(ge=0, le=1)
+    in_test_file: int = Field(ge=0, le=1)
+    is_in_vendor_or_generated_dir: int = Field(ge=0, le=1)
+    taint_source_distance: int = Field(ge=0, le=10000)
+    function_complexity: int = Field(ge=0, le=100000)
+    code_snippet_length: int = Field(ge=0, le=1000000)
+    variable_name_entropy: float = Field(ge=0.0, le=20.0)
+    is_user_input_direct: int = Field(ge=0, le=1)
+    has_type_validation: int = Field(ge=0, le=1)
+    is_third_party_lib_call: int = Field(ge=0, le=1)
+    same_finding_seen_before_count: int = Field(ge=0, le=1000000)
+    developer_dismissed_similar_before: int = Field(ge=0, le=1)
+    file_change_frequency: int = Field(ge=0, le=1000000)
+    is_authenticated_endpoint: int = Field(ge=0, le=1)
 
 class BatchRequest(BaseModel):
-    findings: list[Finding]
+    # Node.js sends chunks of 50; cap at 200 to bound CPU/memory per request
+    # while leaving headroom for larger legitimate batches.
+    findings: list[Finding] = Field(min_length=1, max_length=200)
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
