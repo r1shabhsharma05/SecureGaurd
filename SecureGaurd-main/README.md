@@ -9,11 +9,49 @@ This directory is the canonical application root. The Git repository root contai
 - `src/`: React/Vite frontend
 - `backend/`: Express API, Prisma/PostgreSQL access, scanners, integrations, and tests
 - `backend/prisma/`: Prisma schema and migration configuration
-- `backend/services/fp-classifier/`: optional Python false-positive classifier
+- `backend/services/fp-classifier/`: optional Python false-positive classifier (FastAPI, XGBoost)
+- `backend/services/severity-ranker/`: optional Python severity-priority ranker, served by the same FastAPI service under `/v2/rank`
+- `backend/routes/ml.js`: versioned Node proxy (`/api/v2/ml/rank`) for the ranker
 - `public/`: frontend assets
 - `docs/`: readiness and operational documentation
 
 The frontend and backend are deployed separately. Vercel hosts the static SPA; the Express API is intended for a long-running Node web service such as Render. PostgreSQL and all third-party credentials remain external managed services.
+
+## System architecture
+
+```mermaid
+flowchart LR
+    Dev[Developer browser] -->|HTTPS| SPA[React SPA<br/>Vercel]
+    SPA -->|REST /api| API[Express API<br/>Render]
+    API -->|Prisma| DB[(PostgreSQL)]
+    API -->|/classify/batch<br/>/v2/rank/batch| ML[Python ML service<br/>FastAPI :8001]
+    ML -->|REAL / FALSE_POSITIVE| FP[XGBoost FP classifier<br/>v1_synthetic]
+    ML -->|0-100 priority| SR[XGBoost severity ranker<br/>v0_heuristic]
+    API -->|scan webhooks| GH[GitHub / GitLab]
+    API -->|remediation| GEM[Gemini API]
+    API -->|billing| ST[Stripe]
+```
+
+## Scan data flow
+
+```mermaid
+flowchart TD
+    A[Trigger scan] --> B[AST feature extraction<br/>astExtractor.js]
+    B --> C[Enrichment<br/>scans.js: dismiss history,<br/>git churn, rule map]
+    C --> D{Has mlFeatures?}
+    D -->|yes| E[POST /classify/batch<br/>chunks of 50]
+    E --> F[Prediction per finding<br/>REAL or FALSE_POSITIVE]
+    F --> G[FALSE_POSITIVE → status ignored<br/>REAL → status open]
+    D -->|no| H[Secrets / non-SAST<br/>kept as REAL]
+    G --> I[(Store: findings +<br/>mlFeatures JSON)]
+    H --> I
+    I --> J[Dashboard: Detected Issues<br/>severity order]
+    J --> K{AI Priority toggle?}
+    K -->|on| L[POST /api/v2/ml/rank<br/>stored mlFeatures]
+    L --> M[POST /v2/rank/batch<br/>0.6 severity + 0.4 P REAL]
+    M --> N[Re-sorted by priority_score<br/>score pill per row]
+    K -->|off| O[Default severity order]
+```
 
 ## Requirements
 
