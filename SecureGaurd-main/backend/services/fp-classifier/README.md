@@ -91,6 +91,36 @@ Classify multiple findings in one call. Node.js sends chunks of 50 max.
 }
 ```
 
+### `POST /v2/rank`
+Priority score (0–100 + band) for one finding — "which open finding do I fix
+first?". Blends the FP classifier's P(REAL) with the severity-priority ranker
+(`0.6 × severity_score + 0.4 × P(REAL) × 100`; severity dominates because
+`scans.js` already auto-ignores likely-FPs). Requires `X-SecureGuard-Key`.
+Answers **503** until the ranker is trained (`python train_severity.py` in
+`../severity-ranker/`).
+
+### `POST /v2/rank/batch`
+Priority scores for up to 200 findings. Per-item fail-safe: a failing item
+falls back to the transparent heuristic formula, marked `"fallback": true`,
+instead of failing the batch. Requires `X-SecureGuard-Key`.
+
+```json
+{
+  "priority_score": 87.5,
+  "band": "critical",
+  "severity_score": 95.0,
+  "severity_band": "critical",
+  "p_real": 0.97,
+  "fp_prediction": "REAL",
+  "fallback": false
+}
+```
+
+The ranker lives in the sibling package `backend/services/severity-ranker/`
+and is served by this same FastAPI process (one deploy, one auth model).
+`/health` reports `severity_ranker_ready` / `severity_ranker_version`.
+Full design, label caveat, and training docs: `docs/severity-ranker.md`.
+
 ### `GET /metrics`
 Returns usage statistics derived from `predictions.log`. Requires `X-SecureGuard-Key` header.
 
