@@ -23,6 +23,10 @@ import {
 } from '../config/filterOptions';
 import './Dashboard.css';
 
+// Feature flag: severity-priority ranker (Day 6). Off by default — the
+// AI Priority toggle below only renders when VITE_ENABLE_SEVERITY_RANK === 'true'.
+const SEVERITY_RANK_ENABLED = import.meta.env.VITE_ENABLE_SEVERITY_RANK === 'true';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Vulnerability {
   id: number;
@@ -113,6 +117,10 @@ export default function Dashboard() {
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [vulns, setVulns] = useState<Vulnerability[]>([]);
+  const [rankMode, setRankMode] = useState<'severity' | 'ai'>('severity');
+  const [rankScores, setRankScores] = useState<Record<number, { score: number; band: string; fallback?: boolean }>>({});
+  const [ranking, setRanking] = useState(false);
+  const [rankDegraded, setRankDegraded] = useState(false);
   const [selectedVuln, setSelectedVuln] = useState<Vulnerability | null>(null);
   const [scans, setScans] = useState<Scan[]>([]);
   const [stats, setStats] = useState({
@@ -520,6 +528,44 @@ export default function Dashboard() {
 
   // Filtering (predicates live in utils/vulnFilters.ts)
   const filteredVulns = filterVulns(vulns, filterSev, filterType, searchQuery);
+  // AI-priority ordering (feature-flagged). Unscored findings (no stored
+  // mlFeatures) keep their relative order at the end of the list.
+  const displayedVulns = rankMode === 'ai'
+    ? [...filteredVulns].sort((a, b) => {
+        const sa = rankScores[a.id]?.score;
+        const sb = rankScores[b.id]?.score;
+        if (sa == null && sb == null) return 0;
+        if (sa == null) return 1;
+        if (sb == null) return -1;
+        return sb - sa;
+      })
+    : filteredVulns;
+
+  const toggleRankMode = useCallback(async () => {
+    if (rankMode === 'ai') { setRankMode('severity'); return; }
+    const ids = filteredVulns.map((v) => v.id);
+    if (ids.length === 0) return;
+    setRanking(true);
+    try {
+      const res = await orgFetch('/api/v2/ml/rank', {
+        method: 'POST',
+        body: JSON.stringify({ vulnerabilityIds: ids }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const scores: Record<number, { score: number; band: string; fallback?: boolean }> = {};
+      for (const r of data.ranked || []) {
+        scores[r.id] = { score: r.priority_score, band: r.band, fallback: r.fallback };
+      }
+      setRankScores(scores);
+      setRankDegraded(!!data.degraded);
+      setRankMode('ai');
+    } catch {
+      // Network/auth failure: stay on severity order; nothing to roll back.
+    } finally {
+      setRanking(false);
+    }
+  }, [rankMode, filteredVulns, orgFetch]);
 
   const filteredRepos = filterRepos(repos, searchQuery);
 
@@ -790,7 +836,7 @@ export default function Dashboard() {
                 <div className="vuln-section-head">
                   <div>
                     <h2 className="section-title">Detected Issues</h2>
-                    <p className="section-sub">{filteredVulns.length} vulnerabilities found</p>
+                    <p className="section-sub">{filteredVulns.length} vulnerabilities found{rankMode === 'ai' && (rankDegraded ? ' · fallback order (classifier unreachable)' : ' · AI priority order')}</p>
                   </div>
                   <div className="vuln-filters" style={{ flexWrap: 'wrap', gap: '6px' }}>
                     <Filter size={14} />
@@ -813,11 +859,24 @@ export default function Dashboard() {
                         {t}
                       </button>
                     ))}
+                    {SEVERITY_RANK_ENABLED && (
+                      <>
+                        <div style={{ height: '16px', width: '1px', background: 'var(--border-color)', margin: '0 2px' }} />
+                        <button
+                          className={`filter-btn ${rankMode === 'ai' ? 'active' : ''}`}
+                          onClick={toggleRankMode}
+                          disabled={ranking}
+                          title={rankMode === 'ai' ? 'Back to severity order' : 'Sort by AI priority score (severity-priority ranker)'}
+                        >
+                          {ranking ? 'Ranking...' : 'AI Priority'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 <div className="vuln-table-wrap">
-                  {filteredVulns.length > 0 ? (
+                  {displayedVulns.length > 0 ? (
                     <table className="vuln-table">
                       <thead>
                         <tr>
@@ -830,7 +889,7 @@ export default function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredVulns.map(v => (
+                        {displayedVulns.map(v => (
                           <tr
                             key={v.id}
                             className={`vuln-row ${selectedVuln?.id === v.id ? 'vuln-row--active' : ''}`}
@@ -840,7 +899,15 @@ export default function Dashboard() {
                             <td><code className="vuln-id" style={{cursor: 'pointer'}} onClick={() => navigate(`/vulnerabilities/${v.id}`)}>V-{String(v.id).padStart(3, '0')}</code></td>
                             <td><span className="vuln-file"><FileCode2 size={13} />{v.filePath}</span></td>
                             <td><span style={{cursor: 'pointer', fontWeight: 600, color: '#e0e7ff'}} onClick={() => navigate(`/vulnerabilities/${v.id}`)}>{v.title}</span></td>
-                            <td><SeverityBadge s={v.severity} /></td>
+                            <td><SeverityBadge s={v.severity} />
+                              {rankMode === 'ai' && rankScores[v.id] != null && (
+                                <span
+                                  title={`AI priority score: ${rankScores[v.id].score} (${rankScores[v.id].band})`}
+                                  style={{ marginLeft: 6, fontSize: 11, padding: '2px 6px', borderRadius: 999, background: 'rgba(129,140,248,0.15)', color: '#a5b4fc', border: '1px solid rgba(129,140,248,0.35)', verticalAlign: 'middle' }}
+                                >
+                                  {rankScores[v.id].score.toFixed(0)}
+                                </span>
+                              )}</td>
                             <td><StatusBadge s={v.status} /></td>
                             <td>
                               <button className="row-action-btn" title="View Full Details" onClick={e => { e.stopPropagation(); navigate(`/vulnerabilities/${v.id}`); }}>

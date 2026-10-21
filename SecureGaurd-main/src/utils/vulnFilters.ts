@@ -17,12 +17,15 @@ export interface FilterableRepo {
   fullName: string;
 }
 
-export function filterVulns(
-  vulns: FilterableVuln[],
+export function filterVulns<T extends FilterableVuln>(
+  vulns: T[],
   filterSev: string,
   filterType: string,
   searchQuery: string,
-): FilterableVuln[] {
+): T[] {
+  // Generic passthrough: callers keep their richer type (e.g. Vulnerability
+  // with .id), so downstream code stays typechecked instead of degrading to
+  // the minimal filter interface.
   const query = searchQuery.toLowerCase();
   return vulns.filter((v) => {
     const matchesSev =
@@ -39,10 +42,11 @@ export function filterVulns(
   });
 }
 
-export function filterRepos(
-  repos: FilterableRepo[],
+export function filterRepos<T extends FilterableRepo>(
+  repos: T[],
   searchQuery: string,
-): FilterableRepo[] {
+): T[] {
+  // Generic passthrough — same rationale as filterVulns above.
   const query = searchQuery.toLowerCase();
   return repos.filter(
     (r) =>
