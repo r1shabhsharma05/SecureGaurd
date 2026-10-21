@@ -11,6 +11,7 @@ Features:
 """
 
 import os
+import sys
 import json
 import datetime
 from contextlib import asynccontextmanager
@@ -19,15 +20,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from predict import predict_finding
 
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 METADATA_JSON = os.path.join(BASE_DIR, "model_metadata.json")
+
+# ─── Severity ranker (sibling package) ────────────────────────────────────────
+# Scores "which finding to fix first" (0-100 priority). Same FastAPI process
+# under a versioned /v2 path — one deploy, one auth model. Weights load lazily
+# inside SeverityRanker, so this service boots even before the first training
+# run; /v2/rank then answers 503 with the exact remediation command.
+SEVERITY_RANKER_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "severity-ranker"))
+SEVERITY_METADATA_JSON = os.path.join(SEVERITY_RANKER_DIR, "severity_metadata.json")
+if SEVERITY_RANKER_DIR not in sys.path:
+    sys.path.insert(0, SEVERITY_RANKER_DIR)
+try:
+    from ranker import SeverityRanker, RankerNotTrained
+    from severity_schema import heuristic_priority_label, priority_band
+    _severity_ranker = SeverityRanker()
+    _RANKER_IMPORT_OK = True
+except Exception as e:
+    _severity_ranker = None
+    _RANKER_IMPORT_OK = False
+    print(f"[service] severity-ranker unavailable (service still boots): {e}")
 LOG_PATH = os.path.join(BASE_DIR, "predictions.log")
 
 # ─── Version ─────────────────────────────────────────────────────────────────
 # Bump on service behavior/contract changes. The *model* version (which
 # training run produced the weights) is separate and comes from
 # model_metadata.json written by retrain.py.
-SERVICE_VERSION = "2.1.0"
+SERVICE_VERSION = "2.2.0"
 
 def get_model_version() -> str:
     """Active model version from training metadata; 'v1_synthetic' before the first retrain."""
@@ -36,6 +57,17 @@ def get_model_version() -> str:
             return json.load(f).get("version", "v1_synthetic")
     except (OSError, ValueError):
         return "v1_synthetic"
+
+
+def get_ranker_version() -> str:
+    """Severity-ranker weights version; 'not_trained' until train_severity.py runs."""
+    try:
+        with open(SEVERITY_METADATA_JSON, "r", encoding="utf-8") as f:
+            return json.load(f).get("version", "v0_heuristic")
+    except (OSError, ValueError):
+        if _severity_ranker is not None and _severity_ranker.is_ready:
+            return "v0_heuristic"
+        return "not_trained"
 
 # ─── Load API Key from env or .env file ───────────────────────────────────────
 CLASSIFIER_API_KEY = os.environ.get("CLASSIFIER_API_KEY")
@@ -157,6 +189,8 @@ def health():
         "version": SERVICE_VERSION,
         "model_version": get_model_version(),
         "model_loaded": os.path.exists(os.path.join(BASE_DIR, "model.joblib")),
+        "severity_ranker_ready": bool(_severity_ranker is not None and _severity_ranker.is_ready),
+        "severity_ranker_version": get_ranker_version(),
         "timestamp": datetime.datetime.now().isoformat()
     }
 
@@ -206,6 +240,85 @@ def classify_batch(batch_req: BatchRequest, request: Request, include_explanatio
                 "confidence": 1.0,
                 "threshold_used": 0.4,
                 "error": str(e)
+            })
+    return {"results": results, "total": len(results)}
+
+# ─── v2: severity-priority ranking ────────────────────────────────────────────
+# Blends the FP classifier's P(REAL) with the severity model's 0-100 score.
+# scans.js already auto-ignores likely-FPs, so what reaches here skews REAL —
+# severity therefore dominates the blend (0.6 / 0.4). Rationale and the
+# heuristic-label caveat are documented in docs/severity-ranker.md.
+_RANK_SEVERITY_W = 0.6
+_RANK_REALPROB_W = 0.4
+
+
+def _real_probability(fp_result: dict) -> float:
+    # predict_finding's "confidence" is P(REAL); unfold it when labeled FP.
+    conf = float(fp_result.get("confidence", 1.0))
+    return conf if fp_result.get("prediction") == "REAL" else 1.0 - conf
+
+
+def _rank_one(finding_dict: dict) -> dict:
+    fp = predict_finding(finding_dict)
+    sev = _severity_ranker.predict_priority(finding_dict)
+    p_real = _real_probability(fp)
+    priority = round(_RANK_SEVERITY_W * sev["priority_score"] + _RANK_REALPROB_W * p_real * 100, 1)
+    return {
+        "priority_score": priority,
+        "band": priority_band(priority),
+        "severity_score": sev["priority_score"],
+        "severity_band": sev["band"],
+        "p_real": round(p_real, 3),
+        "fp_prediction": fp["prediction"],
+        "fallback": False,
+    }
+
+
+def _ranker_ready_or_503():
+    if not _RANKER_IMPORT_OK or _severity_ranker is None or not _severity_ranker.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Severity ranker not trained — run: python train_severity.py in backend/services/severity-ranker/",
+        )
+
+
+@app.post("/v2/rank")
+def rank_single(finding: Finding, request: Request):
+    """Priority score (0-100 + band) for one finding. Auth required."""
+    check_auth(request)
+    _ranker_ready_or_503()
+    try:
+        return _rank_one(finding.model_dump())
+    except RankerNotTrained as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v2/rank/batch")
+def rank_batch(batch_req: BatchRequest, request: Request):
+    """Priority scores for a batch. Per-item fail-safe: a failing item falls
+    back to the transparent heuristic formula (marked fallback:true) instead
+    of failing the whole batch."""
+    check_auth(request)
+    _ranker_ready_or_503()
+    results = []
+    for finding in batch_req.findings:
+        raw = finding.model_dump()
+        try:
+            results.append(_rank_one(raw))
+        except RankerNotTrained as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except Exception:
+            score = heuristic_priority_label(raw)
+            results.append({
+                "priority_score": round(score, 1),
+                "band": priority_band(score),
+                "severity_score": round(score, 1),
+                "severity_band": priority_band(score),
+                "p_real": None,
+                "fp_prediction": None,
+                "fallback": True,
             })
     return {"results": results, "total": len(results)}
 
