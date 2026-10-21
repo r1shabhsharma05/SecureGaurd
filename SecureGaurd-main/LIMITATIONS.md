@@ -94,3 +94,19 @@ This document consolidates all known design constraints, tradeoffs, and future i
 
 - **Limitation:** Gunicorn is POSIX-only and does not run on Windows.
 - **Mitigation:** Use `uvicorn service:app --workers 4` for multi-process production deployment on Windows. This provides equivalent concurrency via multiple worker processes.
+
+---
+
+## 10. Severity Ranker v0 Uses Heuristic-Derived Labels
+
+- **Limitation:** The severity-priority ranker (`backend/services/severity-ranker/`) v0 was trained on targets derived from the transparent formula in `severity_schema.heuristic_priority_label` (CWE base tier ± exposure/context modifiers) — **not** on analyst-labeled severity data, which does not exist yet. This is recorded as `"label_source": "heuristic_v0"` in `severity_metadata.json`.
+- **Impact:** The ranker faithfully approximates the audited formula (held-out MAE 0.28, Spearman ρ 0.9976), but the formula itself bakes in judgments (e.g. unauthenticated +10, test files −15, the 0.6/0.4 severity-vs-P(REAL) blend) that real analyst labels may overturn. Priority scores are *relative triage order*, not absolute risk.
+- **Mitigation:** Label a few hundred findings with analyst severity, point `train_severity.py` at the labeled CSV, and version the weights (`v1_analyst`). The 0–100 serving contract is unchanged, so no caller needs modification. See `docs/severity-ranker.md` ("Upgrade path").
+
+---
+
+## 11. Ranker Availability & Degraded Ordering
+
+- **Limitation:** Ranker weights (`severity_model.joblib`) are a local build artifact and are **not** committed to the repo. Until `python train_severity.py` runs next to the service, `POST /v2/rank` answers **503** with the remediation command.
+- **Impact:** With no weights, the Dashboard AI Priority toggle cannot engage and `POST /api/v2/ml/rank` returns `degraded: true` with static CWE-tier ordering (85/85/80/75/70/60). Triage still works — it just loses the exposure-context and P(REAL) blending.
+- **Fallback behavior:** If the classifier service is unreachable mid-request, the Node route degrades to the same tier ordering, explicitly marked `degraded: true` — never a silent wrong order. Findings without stored `mlFeatures` are omitted from ranking and keep default order.

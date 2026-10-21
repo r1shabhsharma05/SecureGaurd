@@ -198,3 +198,38 @@ async function generateAiFix(vulnerability) {
   }
 }
 ```
+
+---
+
+## Step 6: Train Your Own Severity-Ranker Weights (Prioritization Model)
+
+The severity-priority ranker (`backend/services/severity-ranker/`) ships with
+v0 weights trained on heuristic-derived labels (see `docs/severity-ranker.md`
+for the caveat). You can replace them with weights trained on your own
+analyst-labeled data — the 0–100 serving contract stays identical, so no
+endpoint, Node route, or Dashboard code changes.
+
+**1. Prepare a labeled CSV** with the same 18 raw features as
+`sample_findings.csv`, plus a `priority` column (0–100, your analysts'
+"fix-first" judgment per finding).
+
+**2. Train:**
+
+```bash
+cd backend/services/severity-ranker
+python train_severity.py --data /path/to/your_labeled.csv
+```
+
+The script reuses the FP classifier's fitted encoders and shared
+`FEATURE_COLS`, evaluates on a held-out split (watch Spearman ρ — rank order
+is what matters), and writes `severity_model.joblib` + `severity_metadata.json`.
+
+**3. Version honestly:** edit `severity_metadata.json` — set `version` to
+`v1_analyst` (or your scheme) and `label_source` to describe your labeling
+process. The `/health` endpoint reports this version, so you can confirm the
+deploy picked up your weights.
+
+**4. Validate before relying on it:** check held-out Spearman ρ ≥ 0.9 and
+spot-check the top-20 ranked findings against analyst judgment. A ranker that
+disagrees with your analysts on the top of the queue is worse than the
+heuristic v0 — keep v0 until v1 earns the swap.
