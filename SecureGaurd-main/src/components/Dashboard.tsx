@@ -1502,20 +1502,6 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <div className="settings-card">
-              <h3 className="settings-section-title">Security &amp; API Keys</h3>
-              <div style={{fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
-                <p style={{color: 'var(--text-dim)'}}>Connect plugins using your workspace API Token:</p>
-                <div style={{display: 'flex', gap: '0.5rem', marginTop: '0.25rem'}}>
-                  <code style={{background: 'var(--bg-card)', padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: '6px', flex: 1, fontSize: '0.75rem'}}>
-                    sg_live_token_7fd82390ab12cf9845de7201bc3b
-                  </code>
-                  <button className="connect-repo-btn" style={{padding: '0.5rem'}} onClick={() => navigator.clipboard.writeText('sg_live_token_7fd82390ab12cf9845de7201bc3b').then(() => alert('Copied!'))}>
-                    Copy Key
-                  </button>
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
