@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield, LayoutDashboard, GitBranch, Search,
@@ -12,8 +12,10 @@ import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import { OrganizationSwitcher } from './OrganizationSwitcher';
 import { OrganizationSettingsModal } from './OrganizationSettingsModal';
-import ComplianceReports from './ComplianceReports';
-import SbomPage from './SbomPage';
+// Tab pages are code-split: they load on demand when their tab opens,
+// keeping the initial Dashboard bundle small (vite flags >500 kB chunks).
+const ComplianceReports = lazy(() => import('./ComplianceReports'));
+const SbomPage = lazy(() => import('./SbomPage'));
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
 import { apiUrl } from '../config/api';
@@ -1507,16 +1509,20 @@ export default function Dashboard() {
 
         {/* ── Tab: Compliance Reports ── */}
         {activeNav === 'compliance' && (
-          <ComplianceReports
-            accessToken={accessToken}
-            refreshSession={refreshSession}
-            repos={repos}
-          />
+          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading reports…</div>}>
+            <ComplianceReports
+              accessToken={accessToken}
+              refreshSession={refreshSession}
+              repos={repos}
+            />
+          </Suspense>
         )}
 
         {/* ── Tab: Software Bill of Materials (SBOM) ── */}
         {activeNav === 'sbom' && (
-          <SbomPage selectedRepoId={selectedRepo?.id} />
+          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading SBOM…</div>}>
+            <SbomPage selectedRepoId={selectedRepo?.id} />
+          </Suspense>
         )}
       </main>
 
