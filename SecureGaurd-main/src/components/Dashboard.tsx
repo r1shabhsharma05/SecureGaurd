@@ -686,7 +686,7 @@ export default function Dashboard() {
               <p className="dash-user-name">{user.firstName} {user.lastName}</p>
               <p className="dash-user-email">{user.email}</p>
             </div>
-            <button className="dash-logout-btn" onClick={handleLogout} title="Logout">
+            <button className="dash-logout-btn" onClick={handleLogout} title="Logout" aria-label="Log out">
               <LogOut size={15} />
             </button>
           </div>
