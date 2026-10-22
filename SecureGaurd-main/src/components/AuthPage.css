@@ -164,7 +164,7 @@
   align-items: flex-start;
   gap: 0.75rem;
   margin-top: 0.5rem;
-  cursor: url('/cursors/Link.png'), pointer;
+  cursor: pointer;
 }
 
 .checkbox {

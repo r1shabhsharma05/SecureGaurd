@@ -144,7 +144,7 @@
   flex-direction: column;
   gap: 5px;
   padding: 4px;
-  cursor: url('/cursors/Link.png'), pointer;
+  cursor: pointer;
   border: none;
   background: none;
   margin-left: auto;

@@ -63,7 +63,7 @@
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  cursor: url('/cursors/Normal.png'), default;
+  cursor: default;
   transition: border-color 0.4s ease, box-shadow 0.4s ease;
   transform-style: preserve-3d;
   height: 100%;
