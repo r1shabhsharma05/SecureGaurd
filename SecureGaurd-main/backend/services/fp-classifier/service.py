@@ -15,9 +15,11 @@ import sys
 import json
 import datetime
 from contextlib import asynccontextmanager
+from typing import Any
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from predict import predict_finding
 
 
@@ -48,7 +50,7 @@ LOG_PATH = os.path.join(BASE_DIR, "predictions.log")
 # Bump on service behavior/contract changes. The *model* version (which
 # training run produced the weights) is separate and comes from
 # model_metadata.json written by retrain.py.
-SERVICE_VERSION = "2.2.0"
+SERVICE_VERSION = "2.2.1"
 
 def get_model_version() -> str:
     """Active model version from training metadata; 'v1_synthetic' before the first retrain."""
@@ -151,32 +153,68 @@ def log_prediction(finding_dict: dict, result_dict: dict):
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
 # Range validation keeps out-of-distribution / malformed inputs from reaching
 # the model (e.g. a negative taint distance or a 2 in a 0/1 flag would
-# silently skew the prediction). Violations return 422 before predict_finding
-# runs; the Node.js caller treats non-2xx as fail-safe REAL.
+# silently skew the prediction). On the single-finding endpoints a violation
+# returns 422 before predict_finding runs; the Node.js caller treats non-2xx
+# as fail-safe REAL. Batch endpoints validate per finding instead (see
+# BatchRequest), so one bad finding can never fail the whole batch.
+#
+# Missing numeric features default to the same baselines astExtractor.js
+# uses for code it cannot analyze (all flags 0, taint distance 5, complexity
+# 1). That is what lets non-SAST findings through: IaC/API scanners
+# (iacDockerScanner.js, iacK8sScanner.js, iacTerraformScanner.js,
+# apiSpecScanner.js) emit mlFeatures shaped
+# {framework, category, resourceType, resourceName, ruleId, cweId, isIaC}
+# with none of the 16 SAST signals — they map ruleId/cweId onto the schema
+# and take the defaults for the rest, then classify like any other finding.
 class Finding(BaseModel):
-    rule_id: str = Field(min_length=1, max_length=128)
-    cwe_id: str = Field(min_length=1, max_length=64)
-    is_string_concat: int = Field(ge=0, le=1)
-    is_parameterized_query: int = Field(ge=0, le=1)
-    has_sanitizer_nearby: int = Field(ge=0, le=1)
-    in_test_file: int = Field(ge=0, le=1)
-    is_in_vendor_or_generated_dir: int = Field(ge=0, le=1)
-    taint_source_distance: int = Field(ge=0, le=10000)
-    function_complexity: int = Field(ge=0, le=100000)
-    code_snippet_length: int = Field(ge=0, le=1000000)
-    variable_name_entropy: float = Field(ge=0.0, le=20.0)
-    is_user_input_direct: int = Field(ge=0, le=1)
-    has_type_validation: int = Field(ge=0, le=1)
-    is_third_party_lib_call: int = Field(ge=0, le=1)
-    same_finding_seen_before_count: int = Field(ge=0, le=1000000)
-    developer_dismissed_similar_before: int = Field(ge=0, le=1)
-    file_change_frequency: int = Field(ge=0, le=1000000)
-    is_authenticated_endpoint: int = Field(ge=0, le=1)
+    model_config = ConfigDict(populate_by_name=True)
+
+    rule_id: str = Field(validation_alias=AliasChoices("rule_id", "ruleId"), min_length=1, max_length=128)
+    cwe_id: str = Field(validation_alias=AliasChoices("cwe_id", "cweId"), min_length=1, max_length=64)
+    is_string_concat: int = Field(default=0, ge=0, le=1)
+    is_parameterized_query: int = Field(default=0, ge=0, le=1)
+    has_sanitizer_nearby: int = Field(default=0, ge=0, le=1)
+    in_test_file: int = Field(default=0, ge=0, le=1)
+    is_in_vendor_or_generated_dir: int = Field(default=0, ge=0, le=1)
+    taint_source_distance: int = Field(default=5, ge=0, le=10000)
+    function_complexity: int = Field(default=1, ge=0, le=100000)
+    code_snippet_length: int = Field(default=0, ge=0, le=1000000)
+    variable_name_entropy: float = Field(default=0.0, ge=0.0, le=20.0)
+    is_user_input_direct: int = Field(default=0, ge=0, le=1)
+    has_type_validation: int = Field(default=0, ge=0, le=1)
+    is_third_party_lib_call: int = Field(default=0, ge=0, le=1)
+    same_finding_seen_before_count: int = Field(default=0, ge=0, le=1000000)
+    # Callers send an unbounded COUNT of past dismissals (a prisma count in
+    # scans.js / integration.js), but the model was trained on a 0/1 flag —
+    # accept any non-negative count and coerce to the flag.
+    developer_dismissed_similar_before: int = Field(default=0, ge=0)
+    file_change_frequency: int = Field(default=0, ge=0, le=1000000)
+    is_authenticated_endpoint: int = Field(default=0, ge=0, le=1)
+
+    @field_validator("developer_dismissed_similar_before", mode="after")
+    @classmethod
+    def _dismissed_count_to_flag(cls, v: int) -> int:
+        return 1 if v > 0 else 0
 
 class BatchRequest(BaseModel):
     # Node.js sends chunks of 50; cap at 200 to bound CPU/memory per request
     # while leaving headroom for larger legitimate batches.
-    findings: list[Finding] = Field(min_length=1, max_length=200)
+    # Raw dicts, NOT list[Finding]: FastAPI validates the whole list before
+    # the handler runs, so a single unusual finding (e.g. an IaC shape, or a
+    # finding with no rule id at all) would 422 the entire batch and the
+    # classifier would silently no-op for that scan. Handlers validate each
+    # item with _validate_finding and give failures their own fallback entry.
+    # (list[Any], not list[dict]: even a non-object item must reach the
+    # handler so it can be isolated instead of failing the whole list.)
+    findings: list[Any] = Field(min_length=1, max_length=200)
+
+
+def _validate_finding(raw: Any) -> Finding:
+    """Validate one raw batch item; raises on anything unusable so the
+    caller can isolate the failure to that single finding."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"finding must be a JSON object, got {type(raw).__name__}")
+    return Finding.model_validate(raw)
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
@@ -225,13 +263,16 @@ def classify(finding: Finding, request: Request, include_explanation: bool = Fal
 
 @app.post("/classify/batch")
 def classify_batch(batch_req: BatchRequest, request: Request, include_explanation: bool = False):
-    """Classify a batch of SAST findings — recommended for bulk scans"""
+    """Classify a batch of findings — recommended for bulk scans.
+    Per-finding isolation: an item that fails validation or prediction gets
+    the fail-open REAL fallback entry; the rest of the batch still classifies."""
     check_auth(request)
     results = []
-    for finding in batch_req.findings:
+    for raw in batch_req.findings:
         try:
-            result = predict_finding(finding.model_dump(), include_explanation=include_explanation)
-            log_prediction(finding.model_dump(), result)
+            finding_dict = _validate_finding(raw).model_dump()
+            result = predict_finding(finding_dict, include_explanation=include_explanation)
+            log_prediction(finding_dict, result)
             results.append(result)
         except Exception as e:
             # Fail-open: on error assume REAL so we never miss a real vuln
@@ -295,31 +336,42 @@ def rank_single(finding: Finding, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _rank_fallback(raw: dict) -> dict:
+    """Heuristic fallback entry for one rank item that could not be scored."""
+    score = heuristic_priority_label(raw)
+    return {
+        "priority_score": round(score, 1),
+        "band": priority_band(score),
+        "severity_score": round(score, 1),
+        "severity_band": priority_band(score),
+        "p_real": None,
+        "fp_prediction": None,
+        "fallback": True,
+    }
+
+
 @app.post("/v2/rank/batch")
 def rank_batch(batch_req: BatchRequest, request: Request):
-    """Priority scores for a batch. Per-item fail-safe: a failing item falls
-    back to the transparent heuristic formula (marked fallback:true) instead
-    of failing the whole batch."""
+    """Priority scores for a batch. Per-item fail-safe: an item that fails
+    validation or scoring falls back to the transparent heuristic formula
+    (marked fallback:true) instead of failing the whole batch."""
     check_auth(request)
     _ranker_ready_or_503()
     results = []
-    for finding in batch_req.findings:
-        raw = finding.model_dump()
+    for raw in batch_req.findings:
         try:
-            results.append(_rank_one(raw))
+            finding_dict = _validate_finding(raw).model_dump()
+        except Exception:
+            # Unidentifiable item (no rule/CWE id, not an object, …): still
+            # gets its own fallback entry, scored from whatever arrived.
+            results.append(_rank_fallback(raw if isinstance(raw, dict) else {}))
+            continue
+        try:
+            results.append(_rank_one(finding_dict))
         except RankerNotTrained as e:
             raise HTTPException(status_code=503, detail=str(e))
         except Exception:
-            score = heuristic_priority_label(raw)
-            results.append({
-                "priority_score": round(score, 1),
-                "band": priority_band(score),
-                "severity_score": round(score, 1),
-                "severity_band": priority_band(score),
-                "p_real": None,
-                "fp_prediction": None,
-                "fallback": True,
-            })
+            results.append(_rank_fallback(finding_dict))
     return {"results": results, "total": len(results)}
 
 @app.get("/metrics")
