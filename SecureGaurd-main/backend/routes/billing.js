@@ -34,32 +34,23 @@ async function ensureStripeCustomer(organizationId, userEmail, orgName) {
     return sub.stripeCustomerId;
   }
 
-  try {
-    const stripe = getStripeClient();
-    const customer = await stripe.customers.create({
-      email: userEmail,
-      name: orgName,
-      metadata: {
-        organizationId: String(organizationId)
-      }
-    });
+  // No mock fallback: if Stripe is misconfigured or errors, propagate so the
+  // caller can fail without persisting a fake customer ID or activating a plan.
+  const stripe = getStripeClient();
+  const customer = await stripe.customers.create({
+    email: userEmail,
+    name: orgName,
+    metadata: {
+      organizationId: String(organizationId)
+    }
+  });
 
-    await prisma.subscription.update({
-      where: { organizationId: Number(organizationId) },
-      data: { stripeCustomerId: customer.id }
-    });
+  await prisma.subscription.update({
+    where: { organizationId: Number(organizationId) },
+    data: { stripeCustomerId: customer.id }
+  });
 
-    return customer.id;
-  } catch (err) {
-    console.warn('[Stripe Customer Creation Warning]', err.message);
-    // Return synthetic customer ID if running without live Stripe keys
-    const mockId = `cus_mock_${organizationId}_${Date.now()}`;
-    await prisma.subscription.update({
-      where: { organizationId: Number(organizationId) },
-      data: { stripeCustomerId: mockId }
-    });
-    return mockId;
-  }
+  return customer.id;
 }
 
 /**
@@ -76,6 +67,13 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
       return res.status(400).json({ message: 'Invalid target plan selected for upgrade.' });
     }
 
+    // Fail closed on misconfiguration: a missing/placeholder price ID must
+    // never reach Stripe or a success path.
+    if (!targetPlan.stripePriceId || /mock|placeholder|secureguard_test/i.test(targetPlan.stripePriceId)) {
+      console.error(`[Billing] Stripe price ID for plan ${targetPlan.key} is missing or a placeholder.`);
+      return res.status(503).json({ message: 'Billing is not configured for the selected plan. Please try again later.' });
+    }
+
     const org = await prisma.organization.findUnique({
       where: { id: req.organizationId }
     });
@@ -88,7 +86,13 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
     const userEmail = user ? user.email : 'unknown@secureguard.dev';
 
-    const stripeCustomerId = await ensureStripeCustomer(req.organizationId, userEmail, org.name);
+    let stripeCustomerId;
+    try {
+      stripeCustomerId = await ensureStripeCustomer(req.organizationId, userEmail, org.name);
+    } catch (customerErr) {
+      console.error('[Billing] Failed to ensure Stripe customer:', customerErr.message);
+      return res.status(503).json({ message: 'Billing is temporarily unavailable. Please try again later.' });
+    }
     const domain = process.env.FRONTEND_URL || 'http://localhost:5173';
 
     try {
@@ -123,30 +127,10 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
 
       return res.json({ url: session.url });
     } catch (stripeErr) {
-      console.warn('[Stripe Checkout Session Mock Fallback]', stripeErr.message);
-      // In dev mode without active Stripe price IDs, simulate test checkout URL
-      const mockCheckoutUrl = `${domain}/dashboard?billing_success=true&mock_plan=${targetPlan.key}`;
-      
-      // Auto-update in mock mode for testing convenience
-      await prisma.subscription.update({
-        where: { organizationId: req.organizationId },
-        data: {
-          plan: targetPlan.key,
-          status: 'active',
-          stripePriceId: targetPlan.stripePriceId
-        }
-      });
-
-      await createAuditLog(
-        req.organizationId,
-        req.userId,
-        'BILLING_CHECKOUT_STARTED',
-        'ORGANIZATION',
-        String(req.organizationId),
-        { targetPlan: targetPlan.key, mockMode: true }
-      );
-
-      return res.json({ url: mockCheckoutUrl });
+      // No mock fallback: never activate a paid plan without a real Stripe
+      // checkout. Change nothing and surface a provider error.
+      console.error('[Billing] Stripe checkout session creation failed:', stripeErr.message);
+      return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
     }
   } catch (err) {
     console.error('Error creating checkout session:', err);

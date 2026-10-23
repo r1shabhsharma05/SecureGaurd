@@ -14,23 +14,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
   let event;
 
-  // 1. Signature Verification
-  if (webhookSecret && webhookSecret !== 'whsec_mock_secret_key') {
-    try {
-      const stripe = getStripeClient();
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err) {
-      console.error('[Stripe Webhook Error] Signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Signature Error: ${err.message}`);
-    }
-  } else {
-    // In local dev without secret configured, parse body directly if valid JSON
-    try {
-      event = typeof req.body === 'string' ? JSON.parse(req.body) : JSON.parse(req.body.toString('utf8'));
-    } catch (err) {
-      console.error('[Stripe Webhook] Raw body parsing error:', err.message);
-      return res.status(400).json({ message: 'Invalid payload' });
-    }
+  // 1. Signature Verification — fail closed: without a real webhook secret
+  // there is no way to trust the payload, so reject and process nothing.
+  if (!webhookSecret || webhookSecret === 'whsec_mock_secret_key') {
+    console.error('[Stripe Webhook] STRIPE_WEBHOOK_SECRET is missing or a placeholder; rejecting webhook.');
+    return res.status(503).json({ message: 'Stripe webhook is not configured' });
+  }
+
+  try {
+    const stripe = getStripeClient();
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error('[Stripe Webhook Error] Signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Signature Error: ${err.message}`);
   }
 
   const { id: stripeEventId, type: eventType } = event;
@@ -65,6 +61,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           if (organizationId) {
             const customerId = session.customer ? String(session.customer) : null;
             const subId = session.subscription ? String(session.subscription) : null;
+            // session.line_items is not expanded in webhook payloads, so fall
+            // back to an expanded subscription object, then to the configured
+            // price for the plan named in metadata (never a placeholder).
+            const configuredPriceId = getPlanConfig(planKey)?.stripePriceId;
+            const stripePriceId =
+              session.line_items?.data?.[0]?.price?.id ||
+              (typeof session.subscription === 'object'
+                ? session.subscription?.items?.data?.[0]?.price?.id
+                : null) ||
+              (configuredPriceId && !/mock|placeholder|secureguard_test/i.test(configuredPriceId)
+                ? configuredPriceId
+                : null);
 
             await tx.subscription.upsert({
               where: { organizationId },
@@ -72,7 +80,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
                 organizationId,
                 stripeCustomerId: customerId,
                 stripeSubscriptionId: subId,
-                stripePriceId: session.line_items?.data?.[0]?.price?.id || null,
+                stripePriceId,
                 plan: planKey,
                 status: 'active',
                 currentPeriodStart: new Date(),
@@ -81,6 +89,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               update: {
                 stripeCustomerId: customerId || undefined,
                 stripeSubscriptionId: subId || undefined,
+                stripePriceId: stripePriceId || undefined,
                 plan: planKey,
                 status: 'active',
                 currentPeriodStart: new Date(),
