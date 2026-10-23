@@ -12,6 +12,7 @@ import Dashboard from './components/Dashboard'
 import OnboardingWizard from './components/OnboardingWizard'
 import VulnerabilityDetailsPage from './components/VulnerabilityDetailsPage'
 import { AcceptInvitePage } from './components/AcceptInvitePage'
+import { ResetPasswordPage } from './components/ResetPasswordPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 function Home() {
@@ -44,6 +45,13 @@ function InviteRouteHandler() {
   );
 }
 
+function ResetPasswordRouteHandler() {
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get('token') || '';
+
+  return <ResetPasswordPage token={token} />;
+}
+
 function App() {
   return (
     <Router>
@@ -56,6 +64,7 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
           <Route path="/accept-invite" element={<InviteRouteHandler />} />
+          <Route path="/reset-password" element={<ResetPasswordRouteHandler />} />
         </Routes>
       </ErrorBoundary>
     </Router>
