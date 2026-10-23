@@ -1,24 +1,56 @@
 'use strict';
 
-// Minimal SMTP transport (nodemailer) driven entirely by env config:
-//   SMTP_HOST (required to be "configured"), SMTP_PORT (default 587,
-//   465 implies TLS), SMTP_USER / SMTP_PASS (optional — omitted for
-//   unauthenticated relays / local sinks), EMAIL_FROM (default SMTP_USER).
-// No credentials are hardcoded; without SMTP_HOST the feature is off and
-// callers must say so honestly instead of claiming mail was sent.
+// Mail delivery, two transports:
+//   1. Brevo HTTP API (preferred when BREVO_API_KEY is set) — plain HTTPS,
+//      works where outbound SMTP ports are blocked (e.g. Render free tier
+//      blocks 25/465/587, which made every SMTP attempt time out).
+//   2. SMTP via nodemailer, driven by env: SMTP_HOST (required to be
+//      "configured"), SMTP_PORT (default 587, 465 implies TLS),
+//      SMTP_USER / SMTP_PASS, EMAIL_FROM (default SMTP_USER).
+// No credentials are hardcoded; with neither transport configured the
+// feature is off and callers must say so honestly instead of claiming
+// mail was sent.
 
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
 } catch {
-  nodemailer = null; // package missing -> treated as not configured, app still boots
+  nodemailer = null; // package missing -> SMTP path treated as not configured
 }
 
 function isMailConfigured() {
-  return Boolean(nodemailer && process.env.SMTP_HOST);
+  return Boolean(process.env.BREVO_API_KEY) || Boolean(nodemailer && process.env.SMTP_HOST);
+}
+
+function parseFrom() {
+  const raw = process.env.EMAIL_FROM || process.env.SMTP_USER || 'no-reply@localhost';
+  const m = raw.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+  return m ? { name: m[1] || undefined, email: m[2] } : { email: raw };
+}
+
+async function sendViaBrevoApi({ to, subject, text, html }) {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': process.env.BREVO_API_KEY,
+      'Content-Type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({
+      sender: parseFrom(),
+      to: [{ email: to }],
+      subject,
+      textContent: text,
+      htmlContent: html,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`Brevo API responded ${res.status}`);
+  return true;
 }
 
 async function sendMail({ to, subject, text, html }) {
+  if (process.env.BREVO_API_KEY) return sendViaBrevoApi({ to, subject, text, html });
   if (!isMailConfigured()) return false;
   const port = Number(process.env.SMTP_PORT) || 587;
   const transport = nodemailer.createTransport({
