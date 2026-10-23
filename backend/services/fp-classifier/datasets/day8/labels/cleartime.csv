@@ -1,8 +1,0 @@
-finding_key,label
-SAST-001|routes/article.js|13,1
-SAST-001|routes/article.js|31,1
-SAST-001|routes/article.js|48,1
-SAST-001|routes/article.js|155,1
-SAST-001|routes/category.js|13,1
-SAST-001|routes/comments.js|56,1
-SAST-001|routes/upload.js|57,1
