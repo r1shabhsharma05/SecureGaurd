@@ -1,0 +1,16 @@
+finding_key,label
+SAST-001|data/static/codefixes/dbSchemaChallenge_1.ts|5,1
+SAST-001|data/static/codefixes/dbSchemaChallenge_3.ts|11,drop
+SAST-001|data/static/codefixes/loginAdminChallenge_1.ts|18,drop
+SAST-001|data/static/codefixes/loginAdminChallenge_2.ts|15,0
+SAST-001|data/static/codefixes/loginBenderChallenge_1.ts|18,drop
+SAST-001|data/static/codefixes/loginBenderChallenge_3.ts|15,0
+SAST-001|data/static/codefixes/loginBenderChallenge_4.ts|15,1
+SAST-001|data/static/codefixes/loginJimChallenge_2.ts|15,1
+SAST-001|data/static/codefixes/loginJimChallenge_4.ts|18,drop
+SAST-001|data/static/codefixes/unionSqlInjectionChallenge_1.ts|6,1
+SAST-001|data/static/codefixes/unionSqlInjectionChallenge_3.ts|10,1
+SAST-001|routes/login.ts|34,1
+SAST-001|routes/search.ts|23,1
+SAST-001|test/api/login.test.ts|216,0
+SAST-001|test/cypress/e2e/login.spec.ts|168,0
