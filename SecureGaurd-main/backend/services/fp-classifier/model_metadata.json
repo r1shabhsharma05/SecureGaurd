@@ -1,0 +1,49 @@
+{
+  "version": "v2_real",
+  "training_date": "2026-10-23T05:07:59.934410",
+  "dataset": "real_findings.csv",
+  "dataset_size": 65,
+  "sources": [
+    "https://github.com/OWASP/NodeGoat.git",
+    "https://github.com/apostrophecms/apostrophe.git",
+    "https://github.com/appsecco/dvna.git",
+    "https://github.com/juice-shop/juice-shop.git"
+  ],
+  "feedback": {
+    "dev_errors": 1,
+    "weight": 5.0
+  },
+  "metrics_test": {
+    "n": 13,
+    "accuracy": 1.0,
+    "precision_real": 1.0,
+    "recall_real": 1.0,
+    "f1_real": 1.0,
+    "confusion": {
+      "tn": 12,
+      "fp": 0,
+      "fn": 0,
+      "tp": 1
+    },
+    "missed_real": 0
+  },
+  "baseline_v1_synthetic_test": {
+    "n": 13,
+    "accuracy": 0.1538,
+    "precision_real": 0.0833,
+    "recall_real": 1.0,
+    "f1_real": 0.1538,
+    "confusion": {
+      "tn": 1,
+      "fp": 11,
+      "fn": 0,
+      "tp": 1
+    },
+    "missed_real": 0
+  },
+  "status": "active",
+  "deployment": {
+    "binaries_pushed": false,
+    "note": "model.joblib/rule_encoder.joblib/cwe_encoder.joblib are binary and cannot be pushed via the GitHub API (text-only). They are updated in the local clone; push via git to complete the deploy."
+  }
+}

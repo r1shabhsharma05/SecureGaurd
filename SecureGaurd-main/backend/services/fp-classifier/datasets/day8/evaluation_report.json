@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-23",
+  "dataset": "real_findings.csv",
+  "n_rows": 65,
+  "split": {
+    "train": 39,
+    "dev": 13,
+    "test": 13
+  },
+  "dev_errors": 1,
+  "feedback_weight": 5.0,
+  "baseline_v1_synthetic_on_real_test": {
+    "n": 13,
+    "accuracy": 0.1538,
+    "precision_real": 0.0833,
+    "recall_real": 1.0,
+    "f1_real": 0.1538,
+    "confusion": {
+      "tn": 1,
+      "fp": 11,
+      "fn": 0,
+      "tp": 1
+    },
+    "missed_real": 0
+  },
+  "v2_first_pass_on_test": {
+    "n": 13,
+    "accuracy": 1.0,
+    "precision_real": 1.0,
+    "recall_real": 1.0,
+    "f1_real": 1.0,
+    "confusion": {
+      "tn": 12,
+      "fp": 0,
+      "fn": 0,
+      "tp": 1
+    },
+    "missed_real": 0
+  },
+  "v2_second_pass_on_test": {
+    "n": 13,
+    "accuracy": 1.0,
+    "precision_real": 1.0,
+    "recall_real": 1.0,
+    "f1_real": 1.0,
+    "confusion": {
+      "tn": 12,
+      "fp": 0,
+      "fn": 0,
+      "tp": 1
+    },
+    "missed_real": 0
+  },
+  "gate": {
+    "wins": true,
+    "deployed": true
+  }
+}
