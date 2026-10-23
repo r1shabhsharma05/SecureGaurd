@@ -25,6 +25,10 @@ async function sendMail({ to, subject, text, html }) {
     host: process.env.SMTP_HOST,
     port,
     secure: port === 465,
+    // Fail fast: nodemailer's defaults (2 min connect) hang the request.
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS || '' }
       : undefined,
