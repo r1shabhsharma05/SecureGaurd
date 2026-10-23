@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
+const { sendMail, isMailConfigured } = require('../utils/mailer');
 
 const rateLimit = require('express-rate-limit');
 
@@ -50,6 +51,10 @@ function setRefreshCookie(res, token) {
   });
 }
 
+function frontendBaseUrl() {
+  return (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+}
+
 function clearRefreshCookie(res) {
   // Attributes must match the cookie being cleared, otherwise the browser keeps it.
   res.clearCookie('sg_refresh', { path: '/api/auth', sameSite: 'none', secure: true });
@@ -85,6 +90,22 @@ router.post('/register', authLimiter, async (req, res) => {
 
     setRefreshCookie(res, refreshToken);
 
+    // Best-effort verification email: registration must not fail when SMTP
+    // is unconfigured or down — the token stays stored for /verify-email.
+    if (isMailConfigured()) {
+      const verifyUrl = `${req.protocol}://${req.get('host') || 'localhost'}/api/auth/verify-email?token=${emailVerifyToken}`;
+      try {
+        await sendMail({
+          to: email,
+          subject: 'Verify your SecureGuard email',
+          text: `Welcome to SecureGuard. Verify your email address: ${verifyUrl}`,
+          html: `<p>Welcome to SecureGuard.</p><p><a href="${verifyUrl}">Verify your email address</a></p>`,
+        });
+      } catch (mailErr) {
+        console.error('Failed to send verification email:', mailErr);
+      }
+    }
+
     res.status(201).json({
       accessToken,
       user: { id: newUser.id, firstName, lastName, email, isEmailVerified: false, onboardingCompleted: false },
@@ -94,6 +115,31 @@ router.post('/register', authLimiter, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// ── GET|POST /api/auth/verify-email ───────────────────────────────────────────
+// Consumes the token generated at register (User.emailVerifyToken, stored in
+// plaintext like the password-reset token) and marks the email verified.
+async function verifyEmailHandler(req, res) {
+  const token = req.query?.token || req.body?.token;
+  if (!token) return res.status(400).json({ message: 'Verification token is required' });
+
+  try {
+    const user = await prisma.user.findFirst({ where: { emailVerifyToken: token } });
+    if (!user) return res.status(400).json({ message: 'Invalid or expired verification token' });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { isEmailVerified: true, emailVerifyToken: null },
+    });
+
+    res.json({ message: 'Email verified successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+router.get('/verify-email', verifyEmailHandler);
+router.post('/verify-email', verifyEmailHandler);
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 router.post('/login', authLimiter, async (req, res) => {
@@ -182,17 +228,39 @@ router.post('/forgot-password', resetLimiter, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { email } });
 
-    // Always return 200 to prevent email enumeration
-    if (!user) return res.json({ message: 'If that email exists, a reset link has been sent.' });
+    if (user) {
+      const resetToken  = crypto.randomBytes(32).toString('hex');
+      const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    const resetToken  = crypto.randomBytes(32).toString('hex');
-    const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordResetToken: resetToken, passwordResetExpiry: resetExpiry },
+      });
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordResetToken: resetToken, passwordResetExpiry: resetExpiry },
-    });
+      // Honest failure instead of a false "link sent" claim: mail delivery
+      // being unconfigured is a server-config fact, not user data.
+      if (!isMailConfigured()) {
+        return res.status(503).json({ message: 'Password reset email is not configured on the server, so a reset link cannot be sent. Please contact support.' });
+      }
 
+      const resetUrl = `${frontendBaseUrl()}/reset-password?token=${resetToken}`;
+      try {
+        await sendMail({
+          to: email,
+          subject: 'Reset your SecureGuard password',
+          text: `Reset your SecureGuard password (link expires in 1 hour): ${resetUrl}\nOr enter this token in the app: ${resetToken}`,
+          html: `<p>Reset your SecureGuard password (link expires in 1 hour):</p><p><a href="${resetUrl}">Reset password</a></p>`,
+        });
+      } catch (mailErr) {
+        console.error('Failed to send password reset email:', mailErr);
+        return res.status(503).json({ message: 'Password reset email could not be delivered. Please try again later.' });
+      }
+    } else if (!isMailConfigured()) {
+      // Same honest config response for unknown emails (no enumeration gain).
+      return res.status(503).json({ message: 'Password reset email is not configured on the server, so a reset link cannot be sent. Please contact support.' });
+    }
+
+    // Always return 200 to prevent email enumeration (mail-configured path)
     res.json({
       message: 'If that email exists, a password reset link has been sent to your email.'
     });
@@ -252,11 +320,11 @@ router.get('/me', async (req, res) => {
     const valid = await bcrypt.compare(token, user.refreshToken);
     if (!valid) return res.status(401).json({ message: 'Invalid session' });
 
-    const newAccessToken  = generateAccessToken(user.id);
-    const newRefreshToken = generateRefreshToken(user.id);
-    const hashedRefresh   = await bcrypt.hash(newRefreshToken, 10);
-    await prisma.user.update({ where: { id: user.id }, data: { refreshToken: hashedRefresh } });
-    setRefreshCookie(res, newRefreshToken);
+    // Read-only session restore: do NOT rotate the refresh token here.
+    // Rotating on every /me call made concurrent restores (multiple tabs /
+    // in-flight requests) invalidate each other and caused spurious
+    // logouts. Rotation stays exclusive to POST /refresh.
+    const newAccessToken = generateAccessToken(user.id);
 
     res.json({
       accessToken: newAccessToken,
