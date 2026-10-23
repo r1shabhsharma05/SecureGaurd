@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
 
@@ -35,6 +36,11 @@ const app = express();
 
 const allowedOrigins = getAllowedOrigins();
 app.set('trust proxy', 1);
+// Security headers (F12). Helmet defaults are safe alongside CORS for a
+// JSON API; crossOriginResourcePolicy is relaxed to "cross-origin" so the
+// separately-hosted frontend can consume API responses (incl. generated
+// reports) without CORP blocking — CORS above remains the access gate.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -49,7 +55,12 @@ app.use(cors({
 // Mount Webhook route BEFORE express.json parser so raw signature verification works
 app.use('/api/billing/webhook', billingWebhookRoutes);
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  // Keep the exact request bytes so webhook handlers can verify HMAC
+  // signatures over the raw body (re-serialized JSON does not match).
+  verify: (req, res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cookieParser());
 

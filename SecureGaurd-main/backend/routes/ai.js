@@ -35,13 +35,13 @@ router.post('/fix/:vulnId', async (req, res) => {
     // Generate AI fix
     const result = await generateAiFix(vuln);
 
-    // Cache the fix in the database
+    // Cache the fix in the database — only in aiFix.
+    // Never overwrite description/cweId: they hold the scanner's
+    // original finding and must survive AI-fix generation (F10).
     await prisma.vulnerability.update({
       where: { id: vuln.id },
       data: {
         aiFix: result.fixedCode,
-        description: result.explanation,
-        cweId: result.cweId,
       }
     });
 
