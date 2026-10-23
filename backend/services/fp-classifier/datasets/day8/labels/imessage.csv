@@ -1,7 +1,0 @@
-finding_key,label
-SAST-001|app.js|203,1
-SAST-001|app.js|283,1
-SAST-001|app.js|285,1
-SAST-001|app.js|333,1
-SAST-001|app.js|335,1
-SAST-001|webapp/js/vendor/jquery-1.11.2.min.js|4,0
