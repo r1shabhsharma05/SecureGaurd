@@ -4,7 +4,8 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
 const { runSecurityScan } = require('../utils/securityScanner');
-const path = require('path');
+const { mapRuleId } = require('../utils/ruleMap');
+const { resolveScanTarget } = require('../utils/repoScanSource');
 const crypto = require('crypto');
 const { encrypt, decrypt } = require('../utils/cryptoUtils');
 const rateLimit = require('express-rate-limit');
@@ -15,22 +16,33 @@ const webhookLimiter = rateLimit({
   message: { message: 'Too many webhook requests' },
 });
 
-// Helper: Verify GitHub/GitLab Webhook Signatures
+// Helper: Verify GitHub/GitLab Webhook Signatures.
+// Fails CLOSED: without a configured secret nothing is trusted, and GitHub's
+// HMAC is computed over the exact raw request bytes (captured by the
+// express.json verify hook in server.js) — never over re-serialized JSON,
+// whose key order/whitespace need not match what GitHub signed.
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function verifyWebhookSignature(platform, req) {
   const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) return true; // Optional in dev mode
+  if (!secret) return false;
 
   if (platform === 'github') {
     const signature = req.headers['x-hub-signature-256'];
-    if (!signature) return false;
-    const hmac = crypto.createHmac('sha256', secret);
-    const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+    if (!signature || !Buffer.isBuffer(req.rawBody)) return false;
+    const digest = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+    return safeEqual(signature, digest);
   } else if (platform === 'gitlab') {
     const token = req.headers['x-gitlab-token'];
-    return token === secret;
+    if (!token) return false;
+    return safeEqual(token, secret);
   }
-  return true;
+  return false;
 }
 
 // Webhook endpoint does NOT require auth header since it's called by Github/Gitlab
@@ -43,7 +55,8 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
   }
 
   console.log(`[Webhook Received] Platform: ${platform}`);
-  
+
+  let scanTarget = null;
   try {
     let repoFullName = '';
     let commitSha = '';
@@ -72,9 +85,25 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       return res.status(404).json({ message: `Repository ${repoFullName} is not registered in SecureGuard` });
     }
 
-    // Trigger scanning of the repository
-    const scanPath = path.join(__dirname, '..', '..');
-    const scanResult = runSecurityScan(scanPath);
+    // Scan the pushed repository's own tree (clone of the registered repo),
+    // never SecureGaurd's own checkout. No reachable source → honest failure.
+    try {
+      scanTarget = resolveScanTarget(repo, { branch });
+    } catch (resolveErr) {
+      await prisma.scan.create({
+        data: {
+          userId: repo.userId,
+          organizationId: repo.organizationId,
+          repositoryId: repo.id,
+          status: 'failed',
+          branch,
+          commitSha: commitSha || 'push-event',
+          completedAt: new Date(),
+        },
+      });
+      return res.status(502).json({ message: `Scan failed: ${resolveErr.message}` });
+    }
+    const scanResult = runSecurityScan(scanTarget.scanPath);
 
     // Append ML Features
     for (let finding of scanResult.findings) {
@@ -95,10 +124,11 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
             scan: { repositoryId: repo.id }
           }
         });
-        finding.mlFeatures.developer_dismissed_similar_before = dismissedCount;
+        // Classifier schema field is 0/1 — boolean, not the raw count.
+        finding.mlFeatures.developer_dismissed_similar_before = dismissedCount > 0 ? 1 : 0;
         finding.mlFeatures.file_change_frequency = 0;
 
-        finding.mlFeatures.rule_id = finding.ruleId;
+        finding.mlFeatures.rule_id = mapRuleId(finding.ruleId);
         finding.mlFeatures.cwe_id = finding.cweId;
       }
     }
@@ -119,7 +149,9 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
 
         if (response.ok) {
           const { results } = await response.json();
-          const realSastFindings = sastFindings.filter((_, idx) => {
+          const realSastFindings = sastFindings.filter((f, idx) => {
+            // Never suppress IaC/API findings via the SAST-only classifier.
+            if (f.mlFeatures.isIaC || f.mlFeatures.isApi) return true;
             const pred = results[idx]?.prediction;
             return pred === 'REAL' || !pred;
           });
@@ -195,12 +227,14 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       );
     }
 
+    if (scanTarget) scanTarget.cleanup();
     return res.status(200).json({
       message: 'Webhook processed, scan successfully completed',
       scanId: scan.id,
       issuesFound: scanResult.findings.length
     });
   } catch (err) {
+    if (scanTarget) scanTarget.cleanup();
     console.error('[Webhook Error]', err);
     return res.status(500).json({ message: 'Internal Server Error' });
   }

@@ -4,9 +4,10 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
 const { checkCanTriggerScan } = require('../services/billingService');
-const path = require('path');
 const { execFileSync } = require('child_process');
 const { runSecurityScan } = require('../utils/securityScanner');
+const { mapRuleId } = require('../utils/ruleMap');
+const { resolveScanTarget } = require('../utils/repoScanSource');
 
 // ─── ML feature: file change frequency from git history ─────────────────────
 // The FP classifier was trained with file_change_frequency in 0..50
@@ -33,20 +34,32 @@ function getFileChangeFrequency(scanRoot, relFilePath, cache) {
   return count;
 }
 
-// GET /api/scans/export-feedback — export all user feedback labels for retraining
+// GET /api/scans/export-feedback — export user feedback labels for retraining.
+// Two caller kinds: the classifier service (shared CLASSIFIER_API_KEY header,
+// operator-level export) and an authenticated user, whose export is scoped to
+// the organizations they belong to — never other tenants' labeled findings.
 router.get('/export-feedback', async (req, res, next) => {
   const apiKey = req.headers['x-secureguard-key'];
   if (process.env.CLASSIFIER_API_KEY && apiKey === process.env.CLASSIFIER_API_KEY) {
+    req.serviceKeyCaller = true;
     return next();
   }
   authMiddleware(req, res, next);
 }, async (req, res) => {
   try {
+    const where = {
+      userLabel: { not: null },
+      mlFeatures: { not: null }
+    };
+    if (!req.serviceKeyCaller) {
+      const memberships = await prisma.organizationMembership.findMany({
+        where: { userId: req.userId },
+        select: { organizationId: true }
+      });
+      where.scan = { organizationId: { in: memberships.map(m => m.organizationId) } };
+    }
     const vulns = await prisma.vulnerability.findMany({
-      where: {
-        userLabel: { not: null },
-        mlFeatures: { not: null }
-      },
+      where,
       select: {
         userLabel: true,
         mlFeatures: true
@@ -71,7 +84,7 @@ router.get('/export-feedback', async (req, res, next) => {
         has_type_validation: features.has_type_validation || 0,
         is_third_party_lib_call: features.is_third_party_lib_call || 0,
         same_finding_seen_before_count: features.same_finding_seen_before_count || 0,
-        developer_dismissed_similar_before: features.developer_dismissed_similar_before || 0,
+        developer_dismissed_similar_before: features.developer_dismissed_similar_before ? 1 : 0,
         file_change_frequency: features.file_change_frequency || 0,
         is_authenticated_endpoint: features.is_authenticated_endpoint || 0,
         label: v.userLabel === 'real' ? 1 : 0
@@ -141,6 +154,7 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
   const { repositoryId } = req.body;
   if (!repositoryId || isNaN(parseInt(repositoryId))) return res.status(400).json({ message: 'Valid repositoryId is required' });
 
+  let scanTarget = null;
   try {
     // Entitlement Check: Monthly Scan Limit
     const limitCheck = await checkCanTriggerScan(req.organizationId);
@@ -166,10 +180,34 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
     });
     if (!repo) return res.status(404).json({ message: 'Repository not found in active organization' });
 
-    // Path to scan is the project root folder
-    const scanPath = path.join(__dirname, '..', '..');
-    
-    // Execute real security scan
+    // Scan the CONNECTED repository's own tree (clone/path resolution),
+    // never SecureGaurd's own checkout. No reachable source → honest failure.
+    try {
+      scanTarget = resolveScanTarget(repo);
+    } catch (resolveErr) {
+      const failedScan = await prisma.scan.create({
+        data: {
+          userId: req.userId,
+          organizationId: req.organizationId,
+          repositoryId: repo.id,
+          status: 'failed',
+          branch: 'main',
+          completedAt: new Date(),
+        },
+      });
+      await createAuditLog(
+        req.organizationId,
+        req.userId,
+        'SCAN_FAILED',
+        'SCAN',
+        String(failedScan.id),
+        { repoName: repo.name, reason: resolveErr.message }
+      );
+      return res.status(422).json({ message: `Scan failed: ${resolveErr.message}`, scanId: failedScan.id });
+    }
+    const scanPath = scanTarget.scanPath;
+
+    // Execute real security scan over the repository's tree
     const scanResult = runSecurityScan(scanPath);
 
     // Per-scan cache for git-based file change frequency lookups
@@ -194,20 +232,12 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
             scan: { repositoryId: repo.id }
           }
         });
-        finding.mlFeatures.developer_dismissed_similar_before = dismissedCount;
+        // Classifier schema field is 0/1 — send "was a similar finding ever
+        // dismissed", not the raw dismissal count.
+        finding.mlFeatures.developer_dismissed_similar_before = dismissedCount > 0 ? 1 : 0;
         finding.mlFeatures.file_change_frequency = getFileChangeFrequency(scanPath, finding.filePath, freqCache);
 
-        const RULE_MAP = {
-          'SAST-001': 'sqli-concat',
-          'SAST-002': 'xss-unescaped',
-          'SAST-003': 'path-traversal',
-          'SAST-004': 'hardcoded-secret',
-          'SAST-005': 'insecure-deserialize',
-          'SEC-001': 'hardcoded-secret',
-          'SEC-002': 'hardcoded-secret',
-          'SEC-003': 'hardcoded-secret',
-        };
-        finding.mlFeatures.rule_id = RULE_MAP[finding.ruleId] || finding.ruleId;
+        finding.mlFeatures.rule_id = mapRuleId(finding.ruleId);
         finding.mlFeatures.cwe_id = finding.cweId;
       }
     }
@@ -255,7 +285,11 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
 
       const processedSastFindings = sastFindings.map((f, idx) => {
         const classifierResult = results[idx];
-        const pred = classifierResult?.prediction || 'REAL';
+        // The classifier was trained on SAST features only. IaC/API-spec
+        // findings carry no SAST signals, so a model verdict on them is a
+        // guess from neutral defaults — never let it suppress such a finding.
+        const isNonSast = !!(f.mlFeatures.isIaC || f.mlFeatures.isApi);
+        const pred = isNonSast ? 'REAL' : (classifierResult?.prediction || 'REAL');
         const explanations = classifierResult?.explanations || [];
 
         return {
@@ -315,7 +349,9 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
         lineStart: f.lineStart,
         lineEnd: f.lineEnd,
         codeSnippet: f.codeSnippet,
-        status: 'open',
+        // Persist the classifier outcome: suppressed FPs stay 'ignored' so
+        // list views and stats (which count open only) agree with counters.
+        status: f.status || 'open',
         mlFeatures: f.mlFeatures ? f.mlFeatures : null
       }));
       await prisma.vulnerability.createMany({ data: dbFindings });
@@ -381,8 +417,10 @@ router.post('/trigger', scanTriggerLimiter, async (req, res) => {
       { repoName: repo.name, findingsCount: finalFindings.length, criticalCount: critCount }
     );
 
+    if (scanTarget) scanTarget.cleanup();
     res.status(201).json({ scan, message: `Scan completed. Evaluated ${scanResult.totalFiles} files. Found ${finalFindings.length} real issues.` });
   } catch (err) {
+    if (scanTarget) scanTarget.cleanup();
     console.error('Error running scan:', err);
     res.status(500).json({ message: 'Server error' });
   }
