@@ -95,6 +95,49 @@ the production number. The unbiased estimate comes from `retrain.py`'s held-out
 split (its safety gate compares new vs old model on the same 20% split).
 Re-run any time: `python3 evaluate.py [--data …] [--output report.json]`.
 
+## Day-8 real-data retrain — v2_real (2026-10-23)
+
+`v1_synthetic` was trained on 8,000 synthetic rows. Day 8 replaced it with a
+model trained on **65 real findings** from the project's own scanner run over
+real open-source code (no synthetic rows).
+
+**Dataset** (`backend/services/fp-classifier/datasets/day8/`): 8 REAL /
+57 FALSE_POSITIVE, expert-labeled per finding by reading code context.
+Sources: OWASP Juice Shop (7 REAL / 4 FP — raw SQLi vs parameterized/test
+code), ApostropheCMS (0 / 51 — safe Postgres query builder the scanner's
+`${}` regex still flags), DVNA (1 / 1), NodeGoat (0 / 1 — vendored jQuery).
+Ambiguous findings (weak blocklists) were dropped, not guessed. 4 CVE pairs
+were probed + 3,600 npm advisories mined — the scanner's patterns fired on
+zero fix regions, so the CVE-pair path contributed no rows (documented in
+`sources.json`).
+
+**Training** (`real_data_retrain.py`): stratified 60/20/20 train/dev/test;
+v1_synthetic baseline on the test set; v2 trained on train; Rishabh's feedback
+loop (1 dev misclassification → `feedback_errors.csv` → second pass at 5×
+sample weight); TEST never trained on. Safety gate: deploy iff v2 beats v1
+on accuracy with no worse REAL recall.
+
+**Held-out test results (13 rows):**
+
+| Model | Accuracy | REAL precision | REAL recall | Missed REAL |
+|---|---|---|---|---|
+| v1_synthetic (baseline) | 0.1538 | 0.0833 | 1.0000 | 0 |
+| v2 first pass | 1.0000 | 1.0000 | 1.0000 | 0 |
+| v2 + feedback pass | 1.0000 | 1.0000 | 1.0000 | 0 |
+
+v1 predicts nearly everything REAL on real data (synthetic correlations don't
+transfer) — gate passed, v2_real deployed. The model is feature-driven, not
+rule-driven: an unseen rule (e.g. SAST-003 → `rule_id_enc=-1`) gets the same
+prediction as the seen-rule equivalent, so the 2-rule training set doesn't
+regress the other rules. Thresholds recalibrated on the real data
+(`thresholds.json`: default 0.70, per-CWE defaulted — only 20 calibration
+samples, recorded in metadata). `/health` reports `model_version: v2_real`.
+
+**Limits (honest):** 65 rows / 2 rules / 13-row test set — the 1.0 metrics are
+a point estimate on a tiny test, not a production guarantee. The dataset is a
+foundation to grow via the runtime feedback loop (`export-feedback`), not a
+finished corpus.
+
 ## Retraining
 
 ```bash
