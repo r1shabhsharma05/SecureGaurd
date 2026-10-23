@@ -1,0 +1,9 @@
+finding_key,label
+SAST-001|model/login.js|36,1
+SAST-001|model/role.js|19,0
+SAST-001|model/role.js|56,1
+SAST-001|model/sms.js|27,1
+SAST-001|model/sms.js|32,1
+SAST-001|model/user.js|19,0
+SAST-001|model/user.js|92,1
+SAST-001|public/javascripts/jquery.min.js|4,0

@@ -1,0 +1,7 @@
+finding_key,label
+SAST-001|model/db.js|13,1
+SAST-001|model/db.js|22,0
+SAST-001|model/db.js|25,1
+SAST-001|model/db.js|101,1
+SAST-001|sast/seeds/sqli-concat.js|6,0
+SAST-001|sast/seeds/sqli-concat.js|10,0

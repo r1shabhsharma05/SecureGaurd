@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-23",
+  "dataset": "real_findings.csv",
+  "n_rows": 222,
+  "n_real": 38,
+  "n_fp": 184,
+  "split": {
+    "train": 133,
+    "dev": 44,
+    "test": 45,
+    "test_real": 8,
+    "seed": 42,
+    "method": "stratified 60/20/20 (identical to real_data_retrain.py)"
+  },
+  "dev_errors": 4,
+  "feedback_weight": 5.0,
+  "baseline_v1_synthetic_on_real_test": {
+    "n": 45,
+    "accuracy": 0.5333,
+    "precision_real": 0.2593,
+    "recall_real": 0.875,
+    "f1_real": 0.4,
+    "confusion": {
+      "tn": 17,
+      "fp": 20,
+      "fn": 1,
+      "tp": 7
+    },
+    "missed_real": 1
+  },
+  "v2_real_on_real_test": {
+    "n": 45,
+    "accuracy": 0.7556,
+    "precision_real": 0.4,
+    "recall_real": 0.75,
+    "f1_real": 0.5217,
+    "confusion": {
+      "tn": 28,
+      "fp": 9,
+      "fn": 2,
+      "tp": 6
+    },
+    "missed_real": 2
+  },
+  "v3_first_pass_on_test": {
+    "n": 45,
+    "accuracy": 0.9556,
+    "precision_real": 0.875,
+    "recall_real": 0.875,
+    "f1_real": 0.875,
+    "confusion": {
+      "tn": 36,
+      "fp": 1,
+      "fn": 1,
+      "tp": 7
+    },
+    "missed_real": 1
+  },
+  "v3_second_pass_on_test": {
+    "n": 45,
+    "accuracy": 1.0,
+    "precision_real": 1.0,
+    "recall_real": 1.0,
+    "f1_real": 1.0,
+    "confusion": {
+      "tn": 37,
+      "fp": 0,
+      "fn": 0,
+      "tp": 8
+    },
+    "missed_real": 0
+  },
+  "gate_vs_v1_original_protocol": {
+    "wins": true
+  },
+  "gate_vs_v2_real": {
+    "wins": true,
+    "deployed": true,
+    "rule": "deploy iff accuracy > v2_real accuracy AND recall_real >= v2_real recall_real on the untouched test split",
+    "binaries_location": "/home/hatch/workspace/tmp-work/day8-v2-weights"
+  }
+}
