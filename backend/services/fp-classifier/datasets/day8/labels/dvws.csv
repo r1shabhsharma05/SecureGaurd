@@ -1,3 +1,0 @@
-finding_key,label
-SAST-001|src/controllers/passphrase.js|59,1
-SAST-001|src/graphql/schema.js|101,0
