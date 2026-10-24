@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
-const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { runSecurityScan } = require('../utils/securityScanner');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
@@ -347,7 +347,8 @@ router.get('/repos', async (req, res) => {
 });
 
 // POST /api/integration/pr-bot: Simulate a PR Bot check response (with org context)
-router.post('/pr-bot', requireOrgContext, async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const { repositoryId, commitSha, prNumber } = req.body;
   if (!repositoryId || !commitSha) {
     return res.status(400).json({ message: 'repositoryId and commitSha are required' });

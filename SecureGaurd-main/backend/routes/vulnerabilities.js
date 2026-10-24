@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
-const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -87,7 +87,8 @@ router.get('/:id', async (req, res) => {
 });
 
 // PATCH /api/vulnerabilities/:id/status — mark status in active organization
-router.patch('/:id/status', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const vulnId = Number(req.params.id);
   if (!vulnId || isNaN(vulnId)) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
@@ -135,7 +136,8 @@ router.patch('/:id/status', async (req, res) => {
 });
 
 // PATCH /api/vulnerabilities/:id/label — explicit ML feedback
-router.patch('/:id/label', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.patch('/:id/label', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const vulnId = Number(req.params.id);
   if (!vulnId || isNaN(vulnId)) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
-const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { checkCanTriggerScan } = require('../services/billingService');
 const { execFileSync } = require('child_process');
 const { runSecurityScan } = require('../utils/securityScanner');
@@ -150,7 +150,8 @@ const scanTriggerLimiter = rateLimit({
 });
 
 // POST /api/scans/trigger — trigger a real SAST/Secret scan for an organization repo
-router.post('/trigger', scanTriggerLimiter, async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const { repositoryId } = req.body;
   if (!repositoryId || isNaN(parseInt(repositoryId))) return res.status(400).json({ message: 'Valid repositoryId is required' });
 

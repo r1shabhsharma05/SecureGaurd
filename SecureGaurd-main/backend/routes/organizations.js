@@ -207,8 +207,8 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
   const { role } = req.body;
 
   if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
-  if (!['OWNER', 'ADMIN', 'DEVELOPER'].includes(role)) {
-    return res.status(400).json({ message: 'Invalid role. Must be OWNER, ADMIN, or DEVELOPER' });
+  if (!['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR'].includes(role)) {
+    return res.status(400).json({ message: 'Invalid role. Must be OWNER, ADMIN, DEVELOPER, or AUDITOR' });
   }
 
   try {
@@ -323,11 +323,13 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
     return res.status(400).json({ message: 'Valid email address is required' });
   }
 
-  const targetRole = role && ['ADMIN', 'DEVELOPER'].includes(role) ? role : 'DEVELOPER';
-
-  if (req.orgRole === 'ADMIN' && targetRole === 'OWNER') {
-    return res.status(403).json({ message: 'Admins cannot send invitations for the Owner role' });
-  }
+  // Roles the inviter may grant: Owners can invite anyone (incl. Owner and
+  // the read-only Auditor); Admins can invite up to Admin. The targetRole is
+  // validated server-side — a client-supplied role is never trusted.
+  const inviteableRoles = req.orgRole === 'OWNER'
+    ? ['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']
+    : ['ADMIN', 'DEVELOPER', 'AUDITOR'];
+  const targetRole = role && inviteableRoles.includes(role) ? role : 'DEVELOPER';
 
   const cleanEmail = email.trim().toLowerCase();
 

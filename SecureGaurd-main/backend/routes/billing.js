@@ -12,9 +12,9 @@ router.use(authMiddleware);
 /**
  * GET /api/billing/usage
  * Returns active organization subscription status, usage metrics, limits, and plan details.
- * Allowed for: OWNER, ADMIN, DEVELOPER
+ * Allowed for: OWNER, ADMIN, DEVELOPER, AUDITOR (read-only role may read usage).
  */
-router.get('/usage', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.get('/usage', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
   try {
     const usage = await getOrgUsage(req.organizationId);
     return res.json(usage);

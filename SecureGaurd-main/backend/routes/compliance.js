@@ -38,7 +38,8 @@ function parseDateRange(dateRangeOption, customFrom, customTo) {
 }
 
 // POST /api/compliance/generate — Generate a new compliance report for active organization
-router.post('/generate', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only; auditors read via GET /reports).
+router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   try {
     const { repositoryId, framework, dateRangeOption, customFromDate, customToDate, reportName } = req.body;
 

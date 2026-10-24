@@ -2,14 +2,15 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
-const { requireOrgContext, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { generateAiFix } = require('../utils/aiFixEngine');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
 
 // POST /api/ai/fix/:vulnId — Generate AI fix for a vulnerability
-router.post('/fix/:vulnId', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const vulnId = parseInt(req.params.vulnId);
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
@@ -72,7 +73,8 @@ router.post('/fix/:vulnId', async (req, res) => {
 });
 
 // PATCH /api/ai/fix/:vulnId/apply — Mark AI fix as applied + resolve vulnerability
-router.patch('/fix/:vulnId/apply', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.patch('/fix/:vulnId/apply', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const vulnId = parseInt(req.params.vulnId);
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
@@ -108,7 +110,8 @@ router.patch('/fix/:vulnId/apply', async (req, res) => {
 });
 
 // PATCH /api/ai/false-positive/:vulnId — Mark as false positive
-router.patch('/false-positive/:vulnId', async (req, res) => {
+// Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
+router.patch('/false-positive/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const vulnId = parseInt(req.params.vulnId);
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
