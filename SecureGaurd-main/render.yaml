@@ -4,6 +4,10 @@ services:
     runtime: node
     rootDir: SecureGaurd-main/backend
     buildCommand: npm install && npm run build
+    # Apply pending Prisma migrations (e.g. the refresh-token grace-window
+    # columns) before the new code goes live. Idempotent; a failure keeps the
+    # previous deploy running instead of shipping code against a stale schema.
+    preDeployCommand: npx prisma migrate deploy --schema prisma/schema.prisma
     startCommand: npm start
     healthCheckPath: /health
     envVars:

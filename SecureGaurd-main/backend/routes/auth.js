@@ -173,37 +173,100 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ── POST /api/auth/refresh ────────────────────────────────────────────────────
+// Rotating refresh with a 60 s grace window for the superseded token.
+// Race safety: the rotation is an atomic compare-and-swap on the verified
+// hash — a concurrent request that loses the race re-reads the row and is
+// honored via the grace window instead of being logged out. A token presented
+// outside its grace window (unknown or replayed) invalidates the session:
+// that is token-reuse detection, and the session is killed.
+const REFRESH_GRACE_MS = 60 * 1000;
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    isEmailVerified: user.isEmailVerified,
+    onboardingCompleted: !!user.onboardingCompleted,
+  };
+}
+
+// Atomically rotate the refresh token: succeeds only if the stored current
+// hash still equals the one we verified. Returns the new access token, or
+// null when another request rotated first (caller re-reads and retries).
+async function rotateRefreshToken(userId, verifiedCurrentHash, res) {
+  const newRefreshToken = generateRefreshToken(userId);
+  const hashedRefresh = await bcrypt.hash(newRefreshToken, 10);
+  const result = await prisma.user.updateMany({
+    where: { id: userId, refreshToken: verifiedCurrentHash },
+    data: {
+      previousRefreshToken: verifiedCurrentHash,
+      refreshGraceExpiresAt: new Date(Date.now() + REFRESH_GRACE_MS),
+      refreshToken: hashedRefresh,
+    },
+  });
+  if (result.count === 0) return null;
+  setRefreshCookie(res, newRefreshToken);
+  return generateAccessToken(userId);
+}
+
 router.post('/refresh', async (req, res) => {
   const token = req.cookies?.sg_refresh;
   if (!token) return res.status(401).json({ message: 'No refresh token' });
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
-    const user = await prisma.user.findUnique({ where: { id: decoded.id } });
-
-    if (!user || !user.refreshToken)
-      return res.status(401).json({ message: 'Session expired, please login again' });
-
-    // Validate stored hash matches the cookie token
-    const valid = await bcrypt.compare(token, user.refreshToken);
-    if (!valid) return res.status(401).json({ message: 'Invalid refresh token' });
-
-    // Rotate — issue new pair
-    const newAccessToken  = generateAccessToken(user.id);
-    const newRefreshToken = generateRefreshToken(user.id);
-    const hashedRefresh   = await bcrypt.hash(newRefreshToken, 10);
-    await prisma.user.update({ where: { id: user.id }, data: { refreshToken: hashedRefresh } });
-
-    setRefreshCookie(res, newRefreshToken);
-
-    res.json({
-      accessToken: newAccessToken,
-      user: { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, isEmailVerified: user.isEmailVerified, onboardingCompleted: !!user.onboardingCompleted },
-    });
+    decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
   } catch {
     clearRefreshCookie(res);
     return res.status(401).json({ message: 'Session expired, please login again' });
   }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+
+    if (!user || !user.refreshToken) {
+      clearRefreshCookie(res);
+      return res.status(401).json({ message: 'Session expired, please login again' });
+    }
+
+    // Path 1: token matches the current hash → rotate.
+    if (await bcrypt.compare(token, user.refreshToken)) {
+      const accessToken = await rotateRefreshToken(user.id, user.refreshToken, res);
+      if (accessToken) {
+        return res.json({ accessToken, user: publicUser(user) });
+      }
+      continue; // lost the atomic race — re-read; the grace path below catches it
+    }
+
+    // Path 2: superseded token presented inside its grace window → honor once, rotate again.
+    if (
+      user.previousRefreshToken &&
+      user.refreshGraceExpiresAt &&
+      user.refreshGraceExpiresAt > new Date() &&
+      (await bcrypt.compare(token, user.previousRefreshToken))
+    ) {
+      const accessToken = await rotateRefreshToken(user.id, user.refreshToken, res);
+      if (accessToken) {
+        return res.json({ accessToken, user: publicUser(user) });
+      }
+      continue;
+    }
+
+    break;
+  }
+
+  // Reuse outside the grace window (or a token that was never issued):
+  // possible theft — kill the session server-side and drop the cookie.
+  try {
+    await prisma.user.update({
+      where: { id: decoded.id },
+      data: { refreshToken: null, previousRefreshToken: null, refreshGraceExpiresAt: null },
+    });
+  } catch { /* user row may already be gone */ }
+  clearRefreshCookie(res);
+  return res.status(401).json({ message: 'Session expired, please login again' });
 });
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
@@ -212,8 +275,8 @@ router.post('/logout', async (req, res) => {
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
-      // Invalidate stored refresh token
-      await prisma.user.update({ where: { id: decoded.id }, data: { refreshToken: null } });
+      // Invalidate stored refresh token and any in-grace superseded token
+      await prisma.user.update({ where: { id: decoded.id }, data: { refreshToken: null, previousRefreshToken: null, refreshGraceExpiresAt: null } });
     } catch { /* already expired */ }
   }
   clearRefreshCookie(res);
@@ -295,6 +358,8 @@ router.post('/reset-password', async (req, res) => {
         passwordResetToken: null,
         passwordResetExpiry: null,
         refreshToken: null, // invalidate all existing sessions
+        previousRefreshToken: null,
+        refreshGraceExpiresAt: null,
       },
     });
 
@@ -317,8 +382,16 @@ router.get('/me', async (req, res) => {
     const user = await prisma.user.findUnique({ where: { id: decoded.id } });
     if (!user || !user.refreshToken) return res.status(401).json({ message: 'Session expired' });
 
-    const valid = await bcrypt.compare(token, user.refreshToken);
-    if (!valid) return res.status(401).json({ message: 'Invalid session' });
+    // Accept the current token, or a superseded token inside its rotation
+    // grace window (a concurrent /refresh may have just rotated it).
+    const currentValid = await bcrypt.compare(token, user.refreshToken);
+    const graceValid =
+      !currentValid &&
+      !!user.previousRefreshToken &&
+      !!user.refreshGraceExpiresAt &&
+      user.refreshGraceExpiresAt > new Date() &&
+      (await bcrypt.compare(token, user.previousRefreshToken));
+    if (!currentValid && !graceValid) return res.status(401).json({ message: 'Invalid session' });
 
     // Read-only session restore: do NOT rotate the refresh token here.
     // Rotating on every /me call made concurrent restores (multiple tabs /

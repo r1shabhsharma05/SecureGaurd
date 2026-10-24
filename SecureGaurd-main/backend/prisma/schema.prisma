@@ -18,6 +18,8 @@ model User {
   email                String                   @unique
   password             String
   refreshToken         String?                  // stored hashed
+  previousRefreshToken   String?                  // hashed superseded token, honored inside the rotation grace window
+  refreshGraceExpiresAt  DateTime?                // expiry of the rotation grace window
   passwordResetToken   String?
   passwordResetExpiry  DateTime?
   isEmailVerified      Boolean                  @default(false)
