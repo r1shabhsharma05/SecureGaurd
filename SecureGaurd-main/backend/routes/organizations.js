@@ -5,6 +5,7 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { checkCanInviteMember } = require('../services/billingService');
+const { sendMail } = require('../utils/mailer');
 
 // All organization endpoints require logged-in user
 router.use(authMiddleware);
@@ -316,6 +317,100 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
   }
 });
 
+// ── POST /api/organizations/:id/leave — Leave organization (any member) ─────
+router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
+  try {
+    // The sole OWNER may not leave: the org would be left ownerless.
+    if (req.orgRole === 'OWNER') {
+      const ownerCount = await prisma.organizationMembership.count({
+        where: { organizationId: req.organizationId, role: 'OWNER' }
+      });
+      if (ownerCount <= 1) {
+        return res.status(400).json({ message: 'Cannot leave as the sole owner — transfer ownership first' });
+      }
+    }
+
+    await prisma.organizationMembership.delete({
+      where: { id: req.orgMembership.id }
+    });
+
+    await createAuditLog(
+      req.organizationId,
+      req.userId,
+      'MEMBER_LEFT',
+      'USER',
+      String(req.userId),
+      { leftRole: req.orgRole }
+    );
+
+    res.json({ message: 'Left organization successfully' });
+  } catch (err) {
+    console.error('Error leaving organization:', err);
+    res.status(500).json({ message: 'Server error leaving organization' });
+  }
+});
+
+// ── POST /api/organizations/:id/transfer-ownership — OWNER only ─────────────
+router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
+  const targetMemberId = parseInt(req.body?.memberId);
+  if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
+
+  try {
+    const targetMembership = await prisma.organizationMembership.findFirst({
+      where: { id: targetMemberId, organizationId: req.organizationId },
+      include: { user: { select: { id: true, email: true, firstName: true, lastName: true } } }
+    });
+
+    if (!targetMembership) {
+      return res.status(404).json({ message: 'Member not found in this organization' });
+    }
+
+    if (targetMembership.userId === req.userId) {
+      return res.status(400).json({ message: 'Cannot transfer ownership to yourself' });
+    }
+
+    const caller = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { id: true, email: true }
+    });
+
+    // Atomic swap: target becomes OWNER, caller steps down to ADMIN.
+    await prisma.$transaction([
+      prisma.organizationMembership.update({
+        where: { id: targetMembership.id },
+        data: { role: 'OWNER' }
+      }),
+      prisma.organizationMembership.update({
+        where: { id: req.orgMembership.id },
+        data: { role: 'ADMIN' }
+      })
+    ]);
+
+    await createAuditLog(
+      req.organizationId,
+      req.userId,
+      'OWNERSHIP_TRANSFERRED',
+      'USER',
+      String(targetMembership.userId),
+      {
+        previousOwnerId: req.userId,
+        previousOwnerEmail: caller ? caller.email : null,
+        newOwnerId: targetMembership.userId,
+        newOwnerEmail: targetMembership.user.email
+      }
+    );
+
+    res.json({
+      message: 'Ownership transferred successfully',
+      previousOwnerId: req.userId,
+      newOwnerId: targetMembership.userId
+    });
+  } catch (err) {
+    console.error('Error transferring ownership:', err);
+    res.status(500).json({ message: 'Server error transferring ownership' });
+  }
+});
+
 // ── POST /api/organizations/:id/invitations — Invite member ─────────────────
 router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   const { email, role } = req.body;
@@ -394,13 +489,43 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
       { invitedEmail: cleanEmail, role: targetRole }
     );
 
+    // Real invite email (Brevo HTTPS API via utils/mailer). Mail failure must
+    // never break invitation creation: report it honestly instead.
+    const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/accept-invite?token=${rawToken}`;
+    let mailSent = false;
+    let mailMessageId = null;
+    try {
+      const inviter = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { firstName: true, lastName: true, email: true }
+      });
+      const inviterName = inviter
+        ? `${inviter.firstName || ''} ${inviter.lastName || ''}`.trim() || inviter.email
+        : 'A team member';
+      const orgName = req.organization ? req.organization.name : 'SecureGaurd';
+      const mailResult = await sendMail({
+        to: cleanEmail,
+        subject: `${inviterName} invited you to join ${orgName} on SecureGaurd`,
+        text: `${inviterName} has invited you to join the "${orgName}" organization on SecureGaurd as ${targetRole}.\n\nAccept the invitation here: ${invitationUrl}\n\nThis invitation expires in 7 days. If you were not expecting this invitation, you can ignore this email.`,
+        html: `<p>${inviterName} has invited you to join the "<strong>${orgName}</strong>" organization on SecureGaurd as <strong>${targetRole}</strong>.</p><p><a href="${invitationUrl}">Accept the invitation</a></p><p>This invitation expires in 7 days. If you were not expecting this invitation, you can ignore this email.</p>`
+      });
+      mailSent = mailResult !== false;
+      mailMessageId = typeof mailResult === 'string' ? mailResult : null;
+    } catch (mailErr) {
+      console.error('Failed to send invitation email:', mailErr);
+      mailSent = false;
+      mailMessageId = null;
+    }
+
     res.status(201).json({
       id: invitation.id,
       invitedEmail: invitation.invitedEmail,
       role: invitation.role,
       expiresAt: invitation.expiresAt,
       token: rawToken,
-      invitationUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/accept-invite?token=${rawToken}`
+      invitationUrl,
+      mailSent,
+      mailMessageId
     });
   } catch (err) {
     console.error('Error creating invitation:', err);

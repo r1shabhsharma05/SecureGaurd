@@ -9,7 +9,8 @@
 //      SMTP_USER / SMTP_PASS, EMAIL_FROM (default SMTP_USER).
 // No credentials are hardcoded; with neither transport configured the
 // feature is off and callers must say so honestly instead of claiming
-// mail was sent.
+// mail was sent. sendMail resolves to false when mail is not sent, true
+// when sent without a provider id, or the provider message id string.
 
 let nodemailer = null;
 try {
@@ -46,7 +47,16 @@ async function sendViaBrevoApi({ to, subject, text, html }) {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`Brevo API responded ${res.status}`);
-  return true;
+  // Surface the provider's message id so callers can prove acceptance.
+  // Brevo returns { messageId } on success; fall back to true if absent.
+  let messageId = true;
+  try {
+    const body = await res.json();
+    if (body && typeof body.messageId === 'string' && body.messageId) messageId = body.messageId;
+  } catch {
+    // Non-JSON success body: acceptance already proven by res.ok.
+  }
+  return messageId;
 }
 
 async function sendMail({ to, subject, text, html }) {
