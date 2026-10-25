@@ -6,7 +6,7 @@ export interface Organization {
   id: number;
   name: string;
   slug: string;
-  role: 'OWNER' | 'ADMIN' | 'DEVELOPER';
+  role: 'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR';
   memberCount?: number;
   repositoryCount?: number;
   createdAt: string;
@@ -18,14 +18,14 @@ export interface OrganizationMember {
   firstName: string;
   lastName: string;
   email: string;
-  role: 'OWNER' | 'ADMIN' | 'DEVELOPER';
+  role: 'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR';
   joinedAt: string;
 }
 
 export interface PendingInvitation {
   id: number;
   invitedEmail: string;
-  role: 'OWNER' | 'ADMIN' | 'DEVELOPER';
+  role: 'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR';
   status: string;
   expiresAt: string;
   createdAt: string;
@@ -50,7 +50,7 @@ interface OrganizationContextType {
   organizations: Organization[];
   activeOrg: Organization | null;
   activeOrgId: number | null;
-  activeRole: 'OWNER' | 'ADMIN' | 'DEVELOPER' | null;
+  activeRole: 'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR' | null;
   loadingOrgs: boolean;
   members: OrganizationMember[];
   invitations: PendingInvitation[];
@@ -63,6 +63,8 @@ interface OrganizationContextType {
   fetchMembers: () => Promise<void>;
   updateMemberRole: (memberId: number, role: string) => Promise<void>;
   removeMember: (memberId: number) => Promise<void>;
+  leaveOrganization: () => Promise<void>;
+  transferOwnership: (memberId: number) => Promise<void>;
   fetchInvitations: () => Promise<void>;
   inviteMember: (email: string, role: string) => Promise<{ token: string; invitationUrl: string }>;
   revokeInvitation: (invitationId: number) => Promise<void>;
@@ -239,6 +241,37 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     await fetchMembers();
   };
 
+  const leaveOrganization = async () => {
+    if (!activeOrg) return;
+    const res = await orgFetch(`/api/organizations/${activeOrg.id}/leave`, {
+      method: 'POST',
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Failed to leave organization');
+
+    // The left org is gone from this user's list: drop the saved selection
+    // and refresh (same pattern as deleteOrganization).
+    localStorage.removeItem('sg_active_org_id');
+    setActiveOrgIdState(null);
+    await fetchOrganizations();
+  };
+
+  const transferOwnership = async (memberId: number) => {
+    if (!activeOrg) return;
+    const res = await orgFetch(`/api/organizations/${activeOrg.id}/transfer-ownership`, {
+      method: 'POST',
+      body: JSON.stringify({ memberId }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Failed to transfer ownership');
+
+    // The caller's own role drops to ADMIN: refresh members and the org list.
+    await fetchMembers();
+    await fetchOrganizations();
+  };
+
   const fetchInvitations = useCallback(async () => {
     if (!activeOrg || (activeRole !== 'OWNER' && activeRole !== 'ADMIN')) return;
     try {
@@ -310,6 +343,8 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         fetchMembers,
         updateMemberRole,
         removeMember,
+        leaveOrganization,
+        transferOwnership,
         fetchInvitations,
         inviteMember,
         revokeInvitation,

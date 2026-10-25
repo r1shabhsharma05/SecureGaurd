@@ -39,6 +39,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     fetchMembers,
     updateMemberRole,
     removeMember,
+    leaveOrganization,
+    transferOwnership,
     fetchInvitations,
     inviteMember,
     revokeInvitation,
@@ -58,13 +60,14 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
 
   // Member invite form state
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<'ADMIN' | 'DEVELOPER'>('DEVELOPER');
+  const [inviteRole, setInviteRole] = useState<'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR'>('DEVELOPER');
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState<{ token: string; invitationUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   // Settings state
+  const [leaving, setLeaving] = useState(false);
   const [orgNameInput, setOrgNameInput] = useState(activeOrg ? activeOrg.name : '');
   const [savingName, setSavingName] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
@@ -155,6 +158,32 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
       setError(toErrorMessage(err, 'Failed to delete organization'));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleLeaveOrganization = async () => {
+    if (!window.confirm('Leave this organization? You will lose access to its repositories, scans, and reports.')) return;
+    setLeaving(true);
+    setError(null);
+
+    try {
+      await leaveOrganization();
+      onClose();
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to leave organization'));
+    } finally {
+      setLeaving(false);
+    }
+  };
+
+  const handleTransferOwnership = async (memberId: number, memberName: string) => {
+    if (!window.confirm(`Transfer ownership to ${memberName}? You will become an Admin and can no longer transfer ownership or delete this organization.`)) return;
+    setError(null);
+
+    try {
+      await transferOwnership(memberId);
+    } catch (err: unknown) {
+      setError(toErrorMessage(err, 'Failed to transfer ownership'));
     }
   };
 
@@ -499,7 +528,9 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       onChange={e => setInviteRole(e.target.value as any)}
                     >
                       <option value="DEVELOPER">Developer (Read/Scan)</option>
+                      <option value="AUDITOR">Auditor (Read-only)</option>
                       <option value="ADMIN">Admin (Full Access)</option>
+                      {isOwner && <option value="OWNER">Owner (Full Control)</option>}
                     </select>
                     <button type="submit" disabled={inviting}>
                       {inviting ? 'Inviting...' : 'Send Invite'}
@@ -557,6 +588,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                                 {isOwner && <option value="OWNER">OWNER</option>}
                                 <option value="ADMIN">ADMIN</option>
                                 <option value="DEVELOPER">DEVELOPER</option>
+                                <option value="AUDITOR">AUDITOR</option>
                               </select>
                             ) : (
                               <span className={`role-badge role-badge-${m.role.toLowerCase()}`}>{m.role}</span>
@@ -565,12 +597,17 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                           <td>{new Date(m.joinedAt).toLocaleDateString()}</td>
                           {canManageMembers && (
                             <td>
+                              {isOwner && !isSelf && (
+                                <button className="btn-remove-member" onClick={() => handleTransferOwnership(m.id, `${m.firstName} ${m.lastName}`)}>
+                                  Transfer ownership
+                                </button>
+                              )}
                               {canRemove ? (
                                 <button className="btn-remove-member" onClick={() => removeMember(m.id)}>
                                   Remove
                                 </button>
                               ) : (
-                                <span className="text-muted">—</span>
+                                !(isOwner && !isSelf) && <span className="text-muted">—</span>
                               )}
                             </td>
                           )}
@@ -662,6 +699,24 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     </button>
                   )}
                 </form>
+              </div>
+
+              <div className="settings-section">
+                <h4>Leave Organization</h4>
+                {isOwner && members.filter(m => m.role === 'OWNER').length <= 1 ? (
+                  <p className="text-muted">You are the sole owner of this organization. Transfer ownership to another member before leaving.</p>
+                ) : (
+                  <>
+                    <p className="text-muted">Leaving removes your access to this organization. This cannot be undone except by a new invitation.</p>
+                    <button
+                      className="btn-remove-member"
+                      disabled={leaving}
+                      onClick={handleLeaveOrganization}
+                    >
+                      {leaving ? 'Leaving...' : 'Leave organization'}
+                    </button>
+                  </>
+                )}
               </div>
 
               {isOwner && (
