@@ -364,7 +364,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                         <span className={`status-pill status-${billingData.status}`}>
                           {billingData.status.toUpperCase()}
                         </span>
-                        {billingData.cancelAtPeriodEnd && (
+                        {billingData.cancelAtPeriodEnd && billingData.plan !== 'FREE' && (
                           <span className="cancel-notice">Cancels at period end</span>
                         )}
                       </div>
