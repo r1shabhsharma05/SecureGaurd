@@ -170,12 +170,57 @@ router.post('/create-portal-session', requireOrgContext, requireOrgRole(['OWNER'
 
       return res.json({ url: portalSession.url });
     } catch (stripeErr) {
-      console.warn('[Stripe Portal Fallback]', stripeErr.message);
-      return res.json({ url: `${domain}/dashboard?portal_simulated=true` });
+      // No simulated fallback: a portal URL that does not come from Stripe
+      // would be a fake billing flow. Fail honestly instead.
+      console.error('[Billing] Stripe portal session creation failed:', stripeErr.message);
+      return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
     }
   } catch (err) {
     console.error('Error creating portal session:', err);
     return res.status(500).json({ message: 'Failed to create billing portal session' });
+  }
+});
+
+/**
+ * GET /api/billing/invoices
+ * Lists the organization's Stripe invoices (real Stripe data, no local copy).
+ * Allowed for: OWNER, ADMIN (invoices are payment records, not member-visible).
+ */
+router.get('/invoices', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+  try {
+    const sub = await getOrgSubscription(req.organizationId);
+
+    if (!sub.stripeCustomerId) {
+      return res.json({ invoices: [] });
+    }
+
+    try {
+      const stripe = getStripeClient();
+      const list = await stripe.invoices.list({
+        customer: sub.stripeCustomerId,
+        limit: 20
+      });
+
+      return res.json({
+        invoices: list.data.map((inv) => ({
+          id: inv.id,
+          number: inv.number,
+          status: inv.status,
+          amountDue: inv.amount_due,
+          amountPaid: inv.amount_paid,
+          currency: inv.currency,
+          created: inv.created,
+          hostedInvoiceUrl: inv.hosted_invoice_url,
+          invoicePdf: inv.invoice_pdf
+        }))
+      });
+    } catch (stripeErr) {
+      console.error('[Billing] Stripe invoice list failed:', stripeErr.message);
+      return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
+    }
+  } catch (err) {
+    console.error('Error fetching billing invoices:', err);
+    return res.status(500).json({ message: 'Failed to fetch invoices' });
   }
 });
 
@@ -188,15 +233,23 @@ router.post('/cancel-subscription', requireOrgContext, requireOrgRole(['OWNER'])
   try {
     const sub = await getOrgSubscription(req.organizationId);
 
-    if (sub.stripeSubscriptionId) {
-      try {
-        const stripe = getStripeClient();
-        await stripe.subscriptions.update(sub.stripeSubscriptionId, {
-          cancel_at_period_end: true
-        });
-      } catch (stripeErr) {
-        console.warn('[Stripe Cancel Warning]', stripeErr.message);
-      }
+    // Nothing to cancel without a real Stripe subscription: setting the flag
+    // on a FREE plan would report a cancellation that does not exist.
+    if (!sub.stripeSubscriptionId) {
+      return res.status(400).json({ message: 'No active paid subscription to cancel.' });
+    }
+
+    // Fail closed: if Stripe rejects the cancel, the local flag must not move
+    // — otherwise the product would report "cancels at period end" while Stripe
+    // keeps billing.
+    try {
+      const stripe = getStripeClient();
+      await stripe.subscriptions.update(sub.stripeSubscriptionId, {
+        cancel_at_period_end: true
+      });
+    } catch (stripeErr) {
+      console.error('[Billing] Stripe cancel failed:', stripeErr.message);
+      return res.status(502).json({ message: 'Billing provider error. Subscription was not canceled.' });
     }
 
     const updatedSub = await prisma.subscription.update({
