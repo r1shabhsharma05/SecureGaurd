@@ -5,7 +5,12 @@ const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { getOrgUsage, getOrgSubscription } = require('../services/billingService');
 const { PLANS, getPlanConfig } = require('../config/plans');
-const { getStripeClient } = require('../utils/stripe');
+const {
+  createSubscription,
+  cancelSubscription,
+  fetchSubscriptionInvoices,
+  mapInvoice
+} = require('../utils/razorpay');
 
 router.use(authMiddleware);
 
@@ -25,40 +30,15 @@ router.get('/usage', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
 });
 
 /**
- * Helper to ensure a Stripe Customer exists for the Organization
- */
-async function ensureStripeCustomer(organizationId, userEmail, orgName) {
-  const sub = await getOrgSubscription(organizationId);
-
-  if (sub.stripeCustomerId) {
-    return sub.stripeCustomerId;
-  }
-
-  // No mock fallback: if Stripe is misconfigured or errors, propagate so the
-  // caller can fail without persisting a fake customer ID or activating a plan.
-  const stripe = getStripeClient();
-  const customer = await stripe.customers.create({
-    email: userEmail,
-    name: orgName,
-    metadata: {
-      organizationId: String(organizationId)
-    }
-  });
-
-  await prisma.subscription.update({
-    where: { organizationId: Number(organizationId) },
-    data: { stripeCustomerId: customer.id }
-  });
-
-  return customer.id;
-}
-
-/**
- * POST /api/billing/create-checkout-session
- * Initiates Stripe Checkout Session for PRO or ENTERPRISE upgrade.
+ * POST /api/billing/create-subscription
+ * Creates a Razorpay subscription for a PRO or ENTERPRISE upgrade and returns
+ * the hosted authorization URL (short_url). The customer authorizes the
+ * mandate there; the plan activates only via the subscription.activated
+ * webhook — this endpoint changes NO local plan or status, so a failed or
+ * abandoned authorization can never leave a paid plan behind.
  * Allowed for: OWNER only
  */
-router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
+router.post('/create-subscription', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
   try {
     const { plan } = req.body; // 'PRO' | 'ENTERPRISE'
     const targetPlan = getPlanConfig(plan);
@@ -67,10 +47,10 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
       return res.status(400).json({ message: 'Invalid target plan selected for upgrade.' });
     }
 
-    // Fail closed on misconfiguration: a missing/placeholder price ID must
-    // never reach Stripe or a success path.
-    if (!targetPlan.stripePriceId || /mock|placeholder|secureguard_test/i.test(targetPlan.stripePriceId)) {
-      console.error(`[Billing] Stripe price ID for plan ${targetPlan.key} is missing or a placeholder.`);
+    // Fail closed on misconfiguration: a missing/placeholder plan ID must
+    // never reach Razorpay or a success path.
+    if (!targetPlan.razorpayPlanId || /mock|placeholder/i.test(targetPlan.razorpayPlanId)) {
+      console.error(`[Billing] Razorpay plan ID for plan ${targetPlan.key} is missing or a placeholder.`);
       return res.status(503).json({ message: 'Billing is not configured for the selected plan. Please try again later.' });
     }
 
@@ -82,38 +62,11 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
       return res.status(404).json({ message: 'Organization not found' });
     }
 
-    // Fetch user record for email
-    const user = await prisma.user.findUnique({ where: { id: req.userId } });
-    const userEmail = user ? user.email : 'unknown@secureguard.dev';
-
-    let stripeCustomerId;
     try {
-      stripeCustomerId = await ensureStripeCustomer(req.organizationId, userEmail, org.name);
-    } catch (customerErr) {
-      console.error('[Billing] Failed to ensure Stripe customer:', customerErr.message);
-      return res.status(503).json({ message: 'Billing is temporarily unavailable. Please try again later.' });
-    }
-    const domain = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-    try {
-      const stripe = getStripeClient();
-      const session = await stripe.checkout.sessions.create({
-        customer: stripeCustomerId,
-        mode: 'subscription',
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price: targetPlan.stripePriceId,
-            quantity: 1
-          }
-        ],
-        client_reference_id: String(req.organizationId),
-        metadata: {
-          organizationId: String(req.organizationId),
-          plan: targetPlan.key
-        },
-        success_url: `${domain}/dashboard?billing_success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${domain}/dashboard?billing_canceled=true`
+      const subscription = await createSubscription({
+        planId: targetPlan.razorpayPlanId,
+        organizationId: req.organizationId,
+        planKey: targetPlan.key
       });
 
       await createAuditLog(
@@ -122,100 +75,41 @@ router.post('/create-checkout-session', requireOrgContext, requireOrgRole(['OWNE
         'BILLING_CHECKOUT_STARTED',
         'ORGANIZATION',
         String(req.organizationId),
-        { targetPlan: targetPlan.key }
+        { targetPlan: targetPlan.key, razorpaySubscriptionId: subscription.id }
       );
 
-      return res.json({ url: session.url });
-    } catch (stripeErr) {
-      // No mock fallback: never activate a paid plan without a real Stripe
-      // checkout. Change nothing and surface a provider error.
-      console.error('[Billing] Stripe checkout session creation failed:', stripeErr.message);
+      return res.json({ url: subscription.short_url, subscriptionId: subscription.id });
+    } catch (providerErr) {
+      // No mock fallback: never activate a paid plan without a real Razorpay
+      // subscription. Change nothing and surface a provider error.
+      console.error('[Billing] Razorpay subscription creation failed:', providerErr.message);
       return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
     }
   } catch (err) {
-    console.error('Error creating checkout session:', err);
-    return res.status(500).json({ message: 'Failed to create checkout session' });
-  }
-});
-
-/**
- * POST /api/billing/create-portal-session
- * Creates a Stripe Customer Billing Portal session for managing invoices/cards.
- * Allowed for: OWNER only
- */
-router.post('/create-portal-session', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
-  try {
-    const sub = await getOrgSubscription(req.organizationId);
-
-    if (!sub.stripeCustomerId) {
-      return res.status(400).json({ message: 'No Stripe billing customer record found for this organization.' });
-    }
-
-    const domain = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-    try {
-      const stripe = getStripeClient();
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: sub.stripeCustomerId,
-        return_url: `${domain}/dashboard`
-      });
-
-      await createAuditLog(
-        req.organizationId,
-        req.userId,
-        'BILLING_PORTAL_OPENED',
-        'ORGANIZATION',
-        String(req.organizationId)
-      );
-
-      return res.json({ url: portalSession.url });
-    } catch (stripeErr) {
-      // No simulated fallback: a portal URL that does not come from Stripe
-      // would be a fake billing flow. Fail honestly instead.
-      console.error('[Billing] Stripe portal session creation failed:', stripeErr.message);
-      return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
-    }
-  } catch (err) {
-    console.error('Error creating portal session:', err);
-    return res.status(500).json({ message: 'Failed to create billing portal session' });
+    console.error('Error creating subscription:', err);
+    return res.status(500).json({ message: 'Failed to create subscription' });
   }
 });
 
 /**
  * GET /api/billing/invoices
- * Lists the organization's Stripe invoices (real Stripe data, no local copy).
+ * Lists the organization's Razorpay subscription invoices (real Razorpay data,
+ * no local copy). Razorpay auto-generates one invoice per billing cycle.
  * Allowed for: OWNER, ADMIN (invoices are payment records, not member-visible).
  */
 router.get('/invoices', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   try {
     const sub = await getOrgSubscription(req.organizationId);
 
-    if (!sub.stripeCustomerId) {
+    if (!sub.razorpaySubscriptionId) {
       return res.json({ invoices: [] });
     }
 
     try {
-      const stripe = getStripeClient();
-      const list = await stripe.invoices.list({
-        customer: sub.stripeCustomerId,
-        limit: 20
-      });
-
-      return res.json({
-        invoices: list.data.map((inv) => ({
-          id: inv.id,
-          number: inv.number,
-          status: inv.status,
-          amountDue: inv.amount_due,
-          amountPaid: inv.amount_paid,
-          currency: inv.currency,
-          created: inv.created,
-          hostedInvoiceUrl: inv.hosted_invoice_url,
-          invoicePdf: inv.invoice_pdf
-        }))
-      });
-    } catch (stripeErr) {
-      console.error('[Billing] Stripe invoice list failed:', stripeErr.message);
+      const items = await fetchSubscriptionInvoices(sub.razorpaySubscriptionId, 20);
+      return res.json({ invoices: items.map(mapInvoice) });
+    } catch (providerErr) {
+      console.error('[Billing] Razorpay invoice list failed:', providerErr.message);
       return res.status(502).json({ message: 'Billing provider error. Please try again later.' });
     }
   } catch (err) {
@@ -233,22 +127,19 @@ router.post('/cancel-subscription', requireOrgContext, requireOrgRole(['OWNER'])
   try {
     const sub = await getOrgSubscription(req.organizationId);
 
-    // Nothing to cancel without a real Stripe subscription: setting the flag
+    // Nothing to cancel without a real Razorpay subscription: setting the flag
     // on a FREE plan would report a cancellation that does not exist.
-    if (!sub.stripeSubscriptionId) {
+    if (!sub.razorpaySubscriptionId) {
       return res.status(400).json({ message: 'No active paid subscription to cancel.' });
     }
 
-    // Fail closed: if Stripe rejects the cancel, the local flag must not move
-    // — otherwise the product would report "cancels at period end" while Stripe
-    // keeps billing.
+    // Fail closed: if Razorpay rejects the cancel, the local flag must not move
+    // — otherwise the product would report "cancels at period end" while
+    // Razorpay keeps billing.
     try {
-      const stripe = getStripeClient();
-      await stripe.subscriptions.update(sub.stripeSubscriptionId, {
-        cancel_at_period_end: true
-      });
-    } catch (stripeErr) {
-      console.error('[Billing] Stripe cancel failed:', stripeErr.message);
+      await cancelSubscription(sub.razorpaySubscriptionId, true);
+    } catch (providerErr) {
+      console.error('[Billing] Razorpay cancel failed:', providerErr.message);
       return res.status(502).json({ message: 'Billing provider error. Subscription was not canceled.' });
     }
 

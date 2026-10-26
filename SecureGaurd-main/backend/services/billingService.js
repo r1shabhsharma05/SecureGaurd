@@ -2,6 +2,37 @@ const prisma = require('../prismaClient');
 const { PLANS, getPlanConfig } = require('../config/plans');
 
 /**
+ * Fetches live Razorpay Plan amounts (paise + currency) for the paid plans.
+ * Best-effort: a missing key, missing plan ID, or provider error degrades to
+ * null per plan — usage must never fail because pricing lookup failed. The
+ * amounts are owned by the Razorpay Plans (set in the dashboard), never here.
+ */
+async function getPlanPrices() {
+  const prices = { PRO: null, ENTERPRISE: null };
+  let fetchPlan;
+  try {
+    ({ fetchPlan } = require('../utils/razorpay'));
+  } catch {
+    return prices;
+  }
+  for (const key of ['PRO', 'ENTERPRISE']) {
+    const planId = PLANS[key].razorpayPlanId;
+    if (!planId) continue;
+    try {
+      const plan = await fetchPlan(planId);
+      const amountPaise = plan?.item?.amount;
+      const currency = plan?.item?.currency;
+      if (typeof amountPaise === 'number' && currency) {
+        prices[key] = { amountPaise, currency };
+      }
+    } catch {
+      // Degrade to null; the UI renders "set in Razorpay dashboard".
+    }
+  }
+  return prices;
+}
+
+/**
  * Ensures an organization has a Subscription record.
  * Auto-creates a FREE plan subscription if none exists (backwards compatibility).
  */
@@ -91,6 +122,7 @@ async function getOrgUsage(organizationId) {
     plan: plan.key,
     planName: plan.name,
     priceMonthly: plan.priceMonthly,
+    planPrices: await getPlanPrices(),
     status: sub.status,
     cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
     currentPeriodStart: startOfPeriod,
@@ -168,6 +200,7 @@ module.exports = {
   getOrgSubscription,
   getOrgPlan,
   getOrgUsage,
+  getPlanPrices,
   checkCanAddRepository,
   checkCanInviteMember,
   checkCanTriggerScan

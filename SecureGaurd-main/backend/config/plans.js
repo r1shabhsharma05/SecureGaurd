@@ -1,5 +1,9 @@
 /**
  * Centralized Plan & Limits Configuration for SecureGuard
+ *
+ * Billing provider: Razorpay (INR). Plan amounts live in the Razorpay Plan
+ * itself (created in the dashboard by the owner) — priceMonthly is null for
+ * paid plans until fetched live via getPlanPrices(); never invent an amount.
  */
 
 const PLANS = {
@@ -7,7 +11,7 @@ const PLANS = {
     key: 'FREE',
     name: 'Free',
     priceMonthly: 0,
-    stripePriceId: null,
+    razorpayPlanId: null,
     maxRepositories: 3,
     maxScansPerMonth: 10,
     maxMembers: 3,
@@ -22,8 +26,8 @@ const PLANS = {
   PRO: {
     key: 'PRO',
     name: 'Pro',
-    priceMonthly: 49,
-    stripePriceId: process.env.STRIPE_PRICE_PRO || null,
+    priceMonthly: null,
+    razorpayPlanId: process.env.RAZORPAY_PLAN_PRO || null,
     maxRepositories: 25,
     maxScansPerMonth: 200,
     maxMembers: 15,
@@ -40,8 +44,8 @@ const PLANS = {
   ENTERPRISE: {
     key: 'ENTERPRISE',
     name: 'Enterprise',
-    priceMonthly: 299,
-    stripePriceId: process.env.STRIPE_PRICE_ENTERPRISE || null,
+    priceMonthly: null,
+    razorpayPlanId: process.env.RAZORPAY_PLAN_ENTERPRISE || null,
     maxRepositories: 9999,
     maxScansPerMonth: 99999,
     maxMembers: 9999,
@@ -58,16 +62,16 @@ const PLANS = {
 };
 
 /**
- * Helper to get plan config by key or price ID
+ * Helper to get plan config by key or Razorpay plan ID
  */
-function getPlanConfig(planKeyOrPriceId) {
-  if (!planKeyOrPriceId) return PLANS.FREE;
-  
-  const keyUpper = String(planKeyOrPriceId).toUpperCase();
+function getPlanConfig(planKeyOrPlanId) {
+  if (!planKeyOrPlanId) return PLANS.FREE;
+
+  const keyUpper = String(planKeyOrPlanId).toUpperCase();
   if (PLANS[keyUpper]) return PLANS[keyUpper];
 
-  if (planKeyOrPriceId === PLANS.PRO.stripePriceId) return PLANS.PRO;
-  if (planKeyOrPriceId === PLANS.ENTERPRISE.stripePriceId) return PLANS.ENTERPRISE;
+  if (planKeyOrPlanId === PLANS.PRO.razorpayPlanId) return PLANS.PRO;
+  if (planKeyOrPlanId === PLANS.ENTERPRISE.razorpayPlanId) return PLANS.ENTERPRISE;
 
   return PLANS.FREE;
 }

@@ -61,6 +61,9 @@ model Subscription {
   stripeCustomerId     String?      @unique
   stripeSubscriptionId String?      @unique
   stripePriceId        String?
+  razorpayCustomerId     String?
+  razorpaySubscriptionId String?      @unique
+  razorpayPlanId         String?
   plan                 String       @default("FREE") // FREE | PRO | ENTERPRISE
   status               String       @default("active") // active | trialing | past_due | canceled | incomplete | incomplete_expired | unpaid
   currentPeriodStart   DateTime?
@@ -74,6 +77,8 @@ model Subscription {
   @@index([organizationId])
   @@index([stripeCustomerId])
   @@index([stripeSubscriptionId])
+  @@index([razorpayCustomerId])
+  @@index([razorpaySubscriptionId])
 }
 
 model StripeWebhookEvent {
@@ -81,6 +86,13 @@ model StripeWebhookEvent {
   stripeEventId String   @unique
   eventType     String
   processedAt   DateTime @default(now())
+}
+
+model RazorpayWebhookEvent {
+  id              Int      @id @default(autoincrement())
+  razorpayEventId String   @unique
+  eventType       String
+  processedAt     DateTime @default(now())
 }
 
 model OrganizationMembership {

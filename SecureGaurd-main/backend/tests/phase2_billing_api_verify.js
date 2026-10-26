@@ -124,11 +124,11 @@ async function runBillingApiVerificationSuite() {
       assert.strictEqual(res.status, 200);
     });
 
-    await test('POST /api/billing/create-checkout-session — OWNER initiates upgrade (200)', async () => {
+    await test('POST /api/billing/create-subscription — OWNER initiates upgrade (200 with keys, 503 fail-closed without)', async () => {
       const res = await makeRequest({
         hostname: '127.0.0.1',
         port: 5000,
-        path: '/api/billing/create-checkout-session',
+        path: '/api/billing/create-subscription',
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${ownerToken}`,
@@ -136,15 +136,23 @@ async function runBillingApiVerificationSuite() {
           'Content-Type': 'application/json'
         }
       }, { plan: 'PRO' });
-      assert.strictEqual(res.status, 200);
-      assert.notStrictEqual(res.body.url, undefined);
+      // Razorpay keys/plan IDs may or may not be configured in the test env:
+      // 200 + auth URL when configured, honest 503 when not. Anything else
+      // (notably a 200 without a URL, or a 500) is a failure.
+      assert.ok(res.status === 200 || res.status === 503, `unexpected status ${res.status}`);
+      if (res.status === 200) {
+        assert.notStrictEqual(res.body.url, undefined);
+        assert.notStrictEqual(res.body.subscriptionId, undefined);
+      } else {
+        assert.match(res.body.message || '', /not configured/i);
+      }
     });
 
-    await test('POST /api/billing/create-checkout-session — ADMIN attempt returns 403 Forbidden', async () => {
+    await test('POST /api/billing/create-subscription — ADMIN attempt returns 403 Forbidden', async () => {
       const res = await makeRequest({
         hostname: '127.0.0.1',
         port: 5000,
-        path: '/api/billing/create-checkout-session',
+        path: '/api/billing/create-subscription',
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${adminToken}`,
@@ -155,11 +163,11 @@ async function runBillingApiVerificationSuite() {
       assert.strictEqual(res.status, 403);
     });
 
-    await test('POST /api/billing/create-checkout-session — DEVELOPER attempt returns 403 Forbidden', async () => {
+    await test('POST /api/billing/create-subscription — DEVELOPER attempt returns 403 Forbidden', async () => {
       const res = await makeRequest({
         hostname: '127.0.0.1',
         port: 5000,
-        path: '/api/billing/create-checkout-session',
+        path: '/api/billing/create-subscription',
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${devToken}`,
@@ -168,6 +176,23 @@ async function runBillingApiVerificationSuite() {
         }
       }, { plan: 'PRO' });
       assert.strictEqual(res.status, 403);
+    });
+
+    await test('Removed Stripe endpoints return 404 (portal + checkout gone)', async () => {
+      for (const path of ['/api/billing/create-portal-session', '/api/billing/create-checkout-session']) {
+        const res = await makeRequest({
+          hostname: '127.0.0.1',
+          port: 5000,
+          path,
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${ownerToken}`,
+            'x-organization-id': String(orgA.id),
+            'Content-Type': 'application/json'
+          }
+        }, { plan: 'PRO' });
+        assert.strictEqual(res.status, 404, `${path} should be gone`);
+      }
     });
 
     await test('IDOR Protection — User requesting unauthorized Org B billing returns 403', async () => {
