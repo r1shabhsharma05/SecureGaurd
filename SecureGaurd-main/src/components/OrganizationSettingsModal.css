@@ -707,7 +707,7 @@
   cursor: pointer;
 }
 
-/* Invoices (Stripe, OWNER/ADMIN only) */
+/* Invoices (Razorpay, OWNER/ADMIN only) */
 .invoices-section {
   margin-top: 24px;
 }

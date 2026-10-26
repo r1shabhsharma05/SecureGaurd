@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useAuth } from '../context/AuthContext';
-import { Check, AlertCircle, CreditCard } from 'lucide-react';
+import { Check, AlertCircle } from 'lucide-react';
 import { toErrorMessage } from '../services/ApiError';
 import './OrganizationSettingsModal.css';
 
@@ -11,10 +11,16 @@ interface Props {
   initialTab?: 'members' | 'invitations' | 'audit' | 'billing' | 'settings';
 }
 
+interface PlanPrice {
+  amountPaise: number;
+  currency: string;
+}
+
 interface BillingUsage {
   plan: string;
   planName: string;
-  priceMonthly: number;
+  priceMonthly: number | null;
+  planPrices: { PRO: PlanPrice | null; ENTERPRISE: PlanPrice | null } | null;
   status: string;
   cancelAtPeriodEnd: boolean;
   currentPeriodStart: string;
@@ -69,7 +75,6 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
-  const [portalLoading, setPortalLoading] = useState(false);
   const [canceling, setCanceling] = useState(false);
 
   // Member invite form state
@@ -103,7 +108,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     }
   }, [orgFetch]);
 
-  // Invoices come straight from Stripe (no local copy); OWNER/ADMIN only,
+  // Invoices come straight from Razorpay (no local copy); OWNER/ADMIN only,
   // matching the API gate. A failed fetch leaves the list empty, never fake.
   const fetchBillingInvoices = useCallback(async () => {
     setLoadingInvoices(true);
@@ -225,46 +230,28 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     setError(null);
 
     try {
-      const res = await orgFetch('/api/billing/create-checkout-session', {
+      const res = await orgFetch('/api/billing/create-subscription', {
         method: 'POST',
         body: JSON.stringify({ plan: planKey })
       });
 
       const data = await res.json();
       if (res.ok && data.url) {
+        // Razorpay hosted authorization page (short_url). The plan activates
+        // only via the subscription.activated webhook after authorization.
         window.location.href = data.url;
       } else {
-        setError(data.message || 'Failed to initiate checkout session');
+        setError(data.message || 'Failed to initiate subscription');
       }
     } catch (err: unknown) {
-      setError(toErrorMessage(err, 'Error starting upgrade checkout'));
+      setError(toErrorMessage(err, 'Error starting upgrade'));
     } finally {
       setCheckoutLoading(null);
     }
   };
 
-  const handleOpenPortal = async () => {
-    if (!isOwner) return;
-    setPortalLoading(true);
-    setError(null);
-
-    try {
-      const res = await orgFetch('/api/billing/create-portal-session', {
-        method: 'POST'
-      });
-
-      const data = await res.json();
-      if (res.ok && data.url) {
-        window.location.href = data.url;
-      } else {
-        setError(data.message || 'Failed to open billing portal');
-      }
-    } catch (err: unknown) {
-      setError(toErrorMessage(err, 'Error launching billing portal'));
-    } finally {
-      setPortalLoading(false);
-    }
-  };
+  const formatPlanPrice = (price: PlanPrice | null | undefined) =>
+    price ? `₹${(price.amountPaise / 100).toLocaleString('en-IN')} ` : null;
 
   const handleCancelSubscription = async () => {
     if (!isOwner) return;
@@ -373,26 +360,15 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       </p>
                     </div>
 
-                    {isOwner && (
+                    {isOwner && billingData.plan !== 'FREE' && !billingData.cancelAtPeriodEnd && (
                       <div className="billing-actions">
-                        <button 
-                          className="btn-secondary-portal" 
-                          onClick={handleOpenPortal} 
-                          disabled={portalLoading}
+                        <button
+                          className="btn-danger-cancel"
+                          onClick={handleCancelSubscription}
+                          disabled={canceling}
                         >
-                          <CreditCard size={15} />
-                          {portalLoading ? 'Opening Portal...' : 'Manage Billing (Stripe)'}
+                          {canceling ? 'Canceling...' : 'Cancel Subscription'}
                         </button>
-
-                        {billingData.plan !== 'FREE' && !billingData.cancelAtPeriodEnd && (
-                          <button 
-                            className="btn-danger-cancel"
-                            onClick={handleCancelSubscription}
-                            disabled={canceling}
-                          >
-                            {canceling ? 'Canceling...' : 'Cancel Subscription'}
-                          </button>
-                        )}
                       </div>
                     )}
 
@@ -465,7 +441,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     <div className={`plan-card ${billingData.plan === 'FREE' ? 'plan-card-active' : ''}`}>
                       <div className="plan-card-header">
                         <h3>Free</h3>
-                        <div className="plan-price">$0 <span>/ month</span></div>
+                        <div className="plan-price">₹0 <span>/ month</span></div>
                       </div>
                       <ul className="plan-features-list">
                         <li><Check size={14} /> 3 Code Repositories</li>
@@ -486,7 +462,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       <div className="featured-badge">MOST POPULAR</div>
                       <div className="plan-card-header">
                         <h3>Pro</h3>
-                        <div className="plan-price">$49 <span>/ month</span></div>
+                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.PRO) || 'Set in Razorpay'} <span>/ month</span></div>
                       </div>
                       <ul className="plan-features-list">
                         <li><Check size={14} /> 25 Code Repositories</li>
@@ -504,7 +480,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                           disabled={!isOwner || checkoutLoading === 'PRO'}
                           onClick={() => handleUpgrade('PRO')}
                         >
-                          {checkoutLoading === 'PRO' ? 'Redirecting to Stripe...' : 'Upgrade to Pro'}
+                          {checkoutLoading === 'PRO' ? 'Redirecting to Razorpay...' : 'Upgrade to Pro'}
                         </button>
                       )}
                     </div>
@@ -513,7 +489,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     <div className={`plan-card ${billingData.plan === 'ENTERPRISE' ? 'plan-card-active' : ''}`}>
                       <div className="plan-card-header">
                         <h3>Enterprise</h3>
-                        <div className="plan-price">$299 <span>/ month</span></div>
+                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.ENTERPRISE) || 'Set in Razorpay'} <span>/ month</span></div>
                       </div>
                       <ul className="plan-features-list">
                         <li><Check size={14} /> Unlimited Repositories</li>
@@ -531,13 +507,13 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                           disabled={!isOwner || checkoutLoading === 'ENTERPRISE'}
                           onClick={() => handleUpgrade('ENTERPRISE')}
                         >
-                          {checkoutLoading === 'ENTERPRISE' ? 'Redirecting to Stripe...' : 'Upgrade to Enterprise'}
+                          {checkoutLoading === 'ENTERPRISE' ? 'Redirecting to Razorpay...' : 'Upgrade to Enterprise'}
                         </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Invoices from Stripe (OWNER/ADMIN only) */}
+                  {/* Invoices from Razorpay (OWNER/ADMIN only) */}
                   {canManageMembers && (
                     <div className="invoices-section">
                       <h4 className="plans-heading">Invoices</h4>
