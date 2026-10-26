@@ -27,6 +27,18 @@ interface BillingUsage {
   features: string[];
 }
 
+interface BillingInvoice {
+  id: string;
+  number: string | null;
+  status: string;
+  amountDue: number;
+  amountPaid: number;
+  currency: string;
+  created: number;
+  hostedInvoiceUrl: string | null;
+  invoicePdf: string | null;
+}
+
 export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, initialTab }) => {
   const { user } = useAuth();
   const {
@@ -54,6 +66,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   // Billing state
   const [billingData, setBillingData] = useState<BillingUsage | null>(null);
   const [loadingBilling, setLoadingBilling] = useState(false);
+  const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [portalLoading, setPortalLoading] = useState(false);
   const [canceling, setCanceling] = useState(false);
@@ -89,6 +103,23 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     }
   }, [orgFetch]);
 
+  // Invoices come straight from Stripe (no local copy); OWNER/ADMIN only,
+  // matching the API gate. A failed fetch leaves the list empty, never fake.
+  const fetchBillingInvoices = useCallback(async () => {
+    setLoadingInvoices(true);
+    try {
+      const res = await orgFetch('/api/billing/invoices');
+      if (res.ok) {
+        const data = await res.json();
+        setInvoices(Array.isArray(data.invoices) ? data.invoices : []);
+      }
+    } catch (err) {
+      console.error('Error fetching billing invoices:', err);
+    } finally {
+      setLoadingInvoices(false);
+    }
+  }, [orgFetch]);
+
   useEffect(() => {
     if (isOpen && activeOrg) {
       if (initialTab) setActiveTab(initialTab);
@@ -98,9 +129,10 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
       if (activeRole === 'OWNER' || activeRole === 'ADMIN') {
         fetchInvitations();
         fetchAuditLogs();
+        fetchBillingInvoices();
       }
     }
-  }, [isOpen, activeOrg, activeRole, initialTab, fetchMembers, fetchBillingUsage, fetchInvitations, fetchAuditLogs]);
+  }, [isOpen, activeOrg, activeRole, initialTab, fetchMembers, fetchBillingUsage, fetchInvitations, fetchAuditLogs, fetchBillingInvoices]);
 
   if (!isOpen || !activeOrg) return null;
 
@@ -494,7 +526,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       {billingData.plan === 'ENTERPRISE' ? (
                         <button className="btn-plan-active" disabled>Current Plan</button>
                       ) : (
-                        <button 
+                        <button
                           className="btn-plan-upgrade"
                           disabled={!isOwner || checkoutLoading === 'ENTERPRISE'}
                           onClick={() => handleUpgrade('ENTERPRISE')}
@@ -504,6 +536,41 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       )}
                     </div>
                   </div>
+
+                  {/* Invoices from Stripe (OWNER/ADMIN only) */}
+                  {canManageMembers && (
+                    <div className="invoices-section">
+                      <h4 className="plans-heading">Invoices</h4>
+                      {loadingInvoices ? (
+                        <div className="empty-state">Loading invoices...</div>
+                      ) : invoices.length === 0 ? (
+                        <div className="empty-state">No invoices yet — invoices appear here after your first payment.</div>
+                      ) : (
+                        <ul className="invoices-list">
+                          {invoices.map((inv) => (
+                            <li key={inv.id} className="invoice-row">
+                              <span className="invoice-number">{inv.number || inv.id}</span>
+                              <span className="invoice-date">
+                                {new Date(inv.created * 1000).toLocaleDateString()}
+                              </span>
+                              <span className="invoice-amount">
+                                {(inv.amountPaid / 100).toFixed(2)} {inv.currency.toUpperCase()}
+                              </span>
+                              <span className={`status-pill status-${inv.status}`}>{inv.status.toUpperCase()}</span>
+                              <span className="invoice-links">
+                                {inv.hostedInvoiceUrl && (
+                                  <a href={inv.hostedInvoiceUrl} target="_blank" rel="noreferrer">View</a>
+                                )}
+                                {inv.invoicePdf && (
+                                  <a href={inv.invoicePdf} target="_blank" rel="noreferrer">PDF</a>
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>

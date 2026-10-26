@@ -706,3 +706,54 @@
   font-weight: 600;
   cursor: pointer;
 }
+
+/* Invoices (Stripe, OWNER/ADMIN only) */
+.invoices-section {
+  margin-top: 24px;
+}
+
+.invoices-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.invoice-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.invoice-number {
+  font-weight: 600;
+}
+
+.invoice-date,
+.invoice-amount {
+  color: #94a3b8;
+}
+
+.invoice-amount {
+  margin-left: auto;
+}
+
+.invoice-links {
+  display: flex;
+  gap: 12px;
+}
+
+.invoice-links a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.invoice-links a:hover {
+  text-decoration: underline;
+}
