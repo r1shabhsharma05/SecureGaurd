@@ -222,7 +222,10 @@ router.get('/reports/:id/pdf', async (req, res) => {
       return res.status(404).json({ message: 'Compliance report not found' });
     }
 
-    const pdfBuffer = await generateCompliancePdf(report);
+    // generateCompliancePdf expects the EVALUATED report object (report/summary/
+    // controls/findings) — that is the reportData JSON column, not the Prisma row.
+    // Passing the row made reportData.report undefined and every PDF download 500.
+    const pdfBuffer = await generateCompliancePdf(report.reportData);
 
     const safeFilename = `${report.framework}_Report_${report.id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
