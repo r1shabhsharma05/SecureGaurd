@@ -304,6 +304,62 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
         </div>
       </div>
 
+      {/* ── Compliance Dashboard: latest report per framework ── */}
+      {/* Derived from the already-fetched reports list (API returns newest first),
+          so no extra request: each card is the org's latest report for that framework.
+          Clicking a card drills into the existing preview modal (controls + findings). */}
+      {!loading && (
+        <div className="compliance-dashboard">
+          <h3 className="dashboard-title">Compliance Dashboard</h3>
+          <p className="dashboard-sub">Latest report per framework — click a card to drill into its controls and findings.</p>
+          <div className="dashboard-grid">
+            {FRAMEWORKS.map(fw => {
+              const latest = reports.find(r => r.framework === fw.id);
+              if (!latest) {
+                return (
+                  <button
+                    key={fw.id}
+                    type="button"
+                    className="dashboard-card dashboard-card--empty"
+                    onClick={() => { setSelectedFramework(fw.id); setIsCreateModalOpen(true); }}
+                  >
+                    <span className={`fw-badge fw-badge--${fw.id.toLowerCase().replace('-', '')}`}>{fw.id}</span>
+                    <span className="dashboard-empty-text">No report yet</span>
+                    <span className="dashboard-empty-cta">Generate {fw.id} report →</span>
+                  </button>
+                );
+              }
+              let scoreClass = 'score-high';
+              if (latest.complianceScore < 60) scoreClass = 'score-low';
+              else if (latest.complianceScore < 80) scoreClass = 'score-med';
+              return (
+                <button
+                  key={fw.id}
+                  type="button"
+                  className="dashboard-card"
+                  onClick={() => openPreview(latest.id)}
+                  title={`Open latest ${fw.id} report: ${latest.name}`}
+                >
+                  <span className={`fw-badge fw-badge--${fw.id.toLowerCase().replace('-', '')}`}>{fw.id}</span>
+                  <span className={`dashboard-score ${scoreClass}`}>{latest.complianceScore}<span>/100</span></span>
+                  <span className="dashboard-ctrl-row">
+                    <span className="ctrl-tag pass">✓ {latest.passedControls} PASS</span>
+                    <span className="ctrl-tag partial">! {latest.partialControls} PARTIAL</span>
+                    <span className="ctrl-tag fail">✕ {latest.failedControls} FAIL</span>
+                  </span>
+                  <span className="dashboard-findings">
+                    {latest.totalFindings} findings · {latest.criticalCount}C {latest.highCount}H {latest.mediumCount}M {latest.lowCount}L
+                  </span>
+                  <span className="dashboard-meta">
+                    {latest.repository?.fullName || latest.repository?.name || 'N/A'} · {new Date(latest.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Report History List / Table ── */}
       {loading ? (
         <div className="compliance-loading">
