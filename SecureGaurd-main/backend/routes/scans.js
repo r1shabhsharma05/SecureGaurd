@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -8,6 +11,8 @@ const { execFileSync } = require('child_process');
 const { runSecurityScan } = require('../utils/securityScanner');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
+const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
+const { scanAPISpecFile } = require('../utils/apiSpecScanner');
 
 // ─── ML feature: file change frequency from git history ─────────────────────
 // The FP classifier was trained with file_change_frequency in 0..50
@@ -424,6 +429,76 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     if (scanTarget) scanTarget.cleanup();
     console.error('Error running scan:', err);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/scans/api-spec — scan an OpenAPI/Swagger spec supplied by URL or
+// pasted content (Day 5). URL fetches go through the SSRF guard: non-http(s)
+// schemes, credential URLs, hosts resolving to non-public addresses, redirect
+// hops to private hosts, and bodies over 2 MB are all rejected before any
+// fetch of a private target. This is an on-demand check: findings are
+// returned in the same shape the repo-scan pipeline persists (type 'api',
+// CWE, mlFeatures.isApi); the repo-scan path is what persists findings and
+// classifier-passes them (IaC/API findings are forced REAL there, never
+// suppressed by the SAST-trained model).
+router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+  try {
+    const { specUrl, specContent, fileName } = req.body || {};
+    if ((specUrl && specContent) || (!specUrl && !specContent)) {
+      return res.status(400).json({ message: 'Provide exactly one of specUrl or specContent.' });
+    }
+
+    let content;
+    let sourceName;
+    let finalUrl = null;
+
+    if (specUrl) {
+      if (typeof specUrl !== 'string' || specUrl.length > 2048) {
+        return res.status(400).json({ message: 'Invalid specUrl.' });
+      }
+      try {
+        const fetched = await fetchPublicSpec(specUrl);
+        content = fetched.content;
+        finalUrl = fetched.finalUrl;
+      } catch (err) {
+        const msg = err.message || 'Failed to fetch spec URL.';
+        const blocked = /blocked|Invalid|credentials|redirects|too large|does not resolve/.test(msg);
+        return res.status(blocked ? 400 : 502).json({ message: msg });
+      }
+      try {
+        const base = path.basename(new URL(finalUrl).pathname);
+        sourceName = /\.(ya?ml|json)$/i.test(base) ? base : 'spec.yaml';
+      } catch (e) {
+        sourceName = 'spec.yaml';
+      }
+    } else {
+      if (typeof specContent !== 'string' || specContent.length === 0 || specContent.length > MAX_SPEC_BYTES) {
+        return res.status(400).json({ message: 'specContent must be a non-empty string under 2 MB.' });
+      }
+      content = specContent;
+      const safeBase = typeof fileName === 'string' ? path.basename(fileName) : '';
+      sourceName = /\.(ya?ml|json)$/i.test(safeBase) ? safeBase : 'spec.yaml';
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-spec-'));
+    try {
+      const tmpFile = path.join(tmpDir, sourceName);
+      fs.writeFileSync(tmpFile, content, 'utf8');
+      const findings = scanAPISpecFile(tmpFile, sourceName);
+      const counts = {
+        total: findings.length,
+        critical: findings.filter(f => f.severity === 'critical').length,
+        high: findings.filter(f => f.severity === 'high').length,
+        medium: findings.filter(f => f.severity === 'medium').length,
+        low: findings.filter(f => f.severity === 'low').length
+      };
+      return res.json({ source: specUrl ? 'url' : 'content', finalUrl, fileName: sourceName, findings, counts });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    console.error('Error scanning API spec:', err);
+    return res.status(500).json({ message: 'Failed to scan API spec' });
   }
 });
 

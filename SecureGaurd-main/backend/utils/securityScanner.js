@@ -123,6 +123,7 @@ const { scanTerraformFile } = require('./iacTerraformScanner');
 const { scanKubernetesFile } = require('./iacK8sScanner');
 const { scanDockerfile } = require('./iacDockerScanner');
 const { scanAPISpecFile } = require('./apiSpecScanner');
+const { scanCloudFormationFile } = require('./iacCloudFormationScanner');
 
 // ── Recursive Directory Traversal ─────────────────────────────────────────────
 function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 }, lineCountRef = { count: 0 }) {
@@ -194,10 +195,14 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
         findings.push(...tfFindings);
       }
 
-      // Kubernetes & OpenAPI (.yaml, .yml)
+      // Kubernetes, CloudFormation & OpenAPI (.yaml, .yml)
       if (ext === '.yaml' || ext === '.yml') {
         try {
           const sampleContent = fs.readFileSync(fullPath, 'utf8');
+          if (/AWSTemplateFormatVersion/i.test(sampleContent) || (/^Resources\s*:/m.test(sampleContent) && /AWS::/.test(sampleContent))) {
+            const cfnFindings = scanCloudFormationFile(fullPath, relPath);
+            findings.push(...cfnFindings);
+          }
           if (/(?:openapi|swagger)\s*:/i.test(sampleContent) || /openapi|swagger/i.test(lowerItem)) {
             const apiFindings = scanAPISpecFile(fullPath, relPath);
             findings.push(...apiFindings);
@@ -209,10 +214,16 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
         } catch (e) {}
       }
 
-      // OpenAPI JSON
-      if (ext === '.json' && (lowerItem.includes('openapi') || lowerItem.includes('swagger'))) {
-        const apiFindings = scanAPISpecFile(fullPath, relPath);
-        findings.push(...apiFindings);
+      // OpenAPI JSON, or CloudFormation JSON template (scanner no-ops on
+      // non-templates, so plain .json files are safe to pass through)
+      if (ext === '.json') {
+        if (lowerItem.includes('openapi') || lowerItem.includes('swagger')) {
+          const apiFindings = scanAPISpecFile(fullPath, relPath);
+          findings.push(...apiFindings);
+        } else if (!item.endsWith('.tf.json')) {
+          const cfnFindings = scanCloudFormationFile(fullPath, relPath);
+          findings.push(...cfnFindings);
+        }
       }
 
       // Dockerfile
@@ -305,6 +316,7 @@ function runSecurityScan(projectPath) {
     terraformCount: findings.filter(f => f.mlFeatures?.framework === 'Terraform').length,
     k8sCount: findings.filter(f => f.mlFeatures?.framework === 'Kubernetes').length,
     dockerCount: findings.filter(f => f.mlFeatures?.framework === 'Docker').length,
+    cloudFormationCount: findings.filter(f => f.mlFeatures?.framework === 'CloudFormation').length,
     openApiCount: findings.filter(f => f.mlFeatures?.framework === 'OpenAPI').length,
     sbomComponentCount: sbomComponents.length
   };

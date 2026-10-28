@@ -227,6 +227,74 @@ const IAC_RULES = {
     description: 'RUN instruction executes unverified remote shell scripts via curl | sh or wget | bash.',
     remediation: 'Download remote packages, verify SHA256 checksums, and execute verified install steps explicitly.',
     references: ['https://cwe.mitre.org/data/definitions/829.html']
+  },
+
+  // ── CLOUDFORMATION SECURITY RULES ──────────────────────────────────────────
+  'CFN-001': {
+    ruleId: 'CFN-001',
+    framework: 'CloudFormation',
+    category: 'Storage',
+    title: 'Publicly Accessible S3 Bucket in Template',
+    severity: 'critical',
+    cweId: 'CWE-200',
+    description: 'S3 bucket resource sets AccessControl to PublicRead or PublicReadWrite, exposing bucket contents to anyone on the internet.',
+    remediation: 'Remove the public AccessControl and add a PublicAccessBlockConfiguration with BlockPublicAcls, BlockPublicPolicy, IgnorePublicAcls and RestrictPublicBuckets all true.',
+    references: ['https://cwe.mitre.org/data/definitions/200.html']
+  },
+  'CFN-002': {
+    ruleId: 'CFN-002',
+    framework: 'CloudFormation',
+    category: 'Network',
+    title: 'Overly Permissive Security Group Ingress (0.0.0.0/0)',
+    severity: 'critical',
+    cweId: 'CWE-284',
+    description: 'Security group ingress rule allows unrestricted access (0.0.0.0/0) to a sensitive port.',
+    remediation: 'Restrict CidrIp to trusted ranges or reference a bastion/security group instead of 0.0.0.0/0.',
+    references: ['https://cwe.mitre.org/data/definitions/284.html']
+  },
+  'CFN-003': {
+    ruleId: 'CFN-003',
+    framework: 'CloudFormation',
+    category: 'Encryption',
+    title: 'Missing Encryption at Rest',
+    severity: 'high',
+    cweId: 'CWE-311',
+    description: 'Storage resource (S3 bucket without BucketEncryption, EBS volume with Encrypted false, RDS instance with StorageEncrypted false) is created without encryption at rest.',
+    remediation: 'Enable BucketEncryption on S3 buckets, Encrypted: true on EBS volumes, and StorageEncrypted: true on RDS instances.',
+    references: ['https://cwe.mitre.org/data/definitions/311.html']
+  },
+  'CFN-004': {
+    ruleId: 'CFN-004',
+    framework: 'CloudFormation',
+    category: 'IAM',
+    title: 'Overly Permissive IAM Policy (Wildcard Action/Resource)',
+    severity: 'high',
+    cweId: 'CWE-732',
+    description: 'IAM policy statement grants wildcard ("*") actions or resources in a CloudFormation template.',
+    remediation: 'Scope each statement to the exact actions and resource ARNs the workload needs.',
+    references: ['https://cwe.mitre.org/data/definitions/732.html']
+  },
+  'CFN-005': {
+    ruleId: 'CFN-005',
+    framework: 'CloudFormation',
+    category: 'Secrets',
+    title: 'Hardcoded Secret in Template Properties',
+    severity: 'critical',
+    cweId: 'CWE-798',
+    description: 'A literal password, secret or API key value is embedded in template resource properties instead of a parameter with NoEcho or a secrets reference.',
+    remediation: 'Move the value to a NoEcho parameter, Secrets Manager dynamic reference, or SSM SecureString parameter.',
+    references: ['https://cwe.mitre.org/data/definitions/798.html']
+  },
+  'CFN-006': {
+    ruleId: 'CFN-006',
+    framework: 'CloudFormation',
+    category: 'Network',
+    title: 'Publicly Accessible RDS Instance',
+    severity: 'high',
+    cweId: 'CWE-200',
+    description: 'RDS DB instance sets PubliclyAccessible to true, exposing the database port to the internet.',
+    remediation: 'Set PubliclyAccessible: false and reach the database only through private subnets or a bastion host.',
+    references: ['https://cwe.mitre.org/data/definitions/200.html']
   }
 };
 
