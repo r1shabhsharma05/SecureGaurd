@@ -369,10 +369,12 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
       data: { riskLevel, updatedAt: new Date() },
     });
 
-    // Generate & Store SPDX 2.3 Software Bill of Materials (SBOM)
+    // Generate & Store SPDX 2.3 + CycloneDX 1.6 Software Bills of Materials
+    // (SBOM) — both from the same component list, so they cannot disagree.
     try {
       const { generateSpdxDocument } = require('../utils/spdxGenerator');
       const { validateSpdxDocument } = require('../utils/spdxValidator');
+      const { generateCycloneDxDocument, validateCycloneDxDocument } = require('../utils/cycloneDxGenerator');
 
       const { spdxDocument, summaryStats: sbomStats } = generateSpdxDocument({
         repository: repo,
@@ -380,6 +382,15 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
         components: scanResult.sbomComponents || [],
         vulnerabilities: finalFindings
       });
+      const { cycloneDxDocument } = generateCycloneDxDocument({
+        repository: repo,
+        scanId: scan.id,
+        components: scanResult.sbomComponents || [],
+      });
+      // Never persist an invalid CycloneDX doc: log and store null (the
+      // SPDX row still saves) rather than serving a broken download.
+      const cycloneValid = validateCycloneDxDocument(cycloneDxDocument);
+      if (!cycloneValid.isValid) console.error('CycloneDX invalid, not stored:', cycloneValid.errors);
 
       const validation = validateSpdxDocument(spdxDocument);
       if (validation.isValid) {
@@ -397,7 +408,8 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
             transitiveCount: sbomStats.transitiveCount,
             vulnerableCount: sbomStats.vulnerableCount,
             ecosystems: sbomStats.ecosystems,
-            spdxDoc: spdxDocument
+            spdxDoc: spdxDocument,
+            cycloneDxDoc: cycloneValid.isValid ? cycloneDxDocument : null
           }
         });
 

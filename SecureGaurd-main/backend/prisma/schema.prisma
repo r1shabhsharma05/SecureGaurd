@@ -272,6 +272,7 @@ model Sbom {
   vulnerableCount   Int          @default(0)
   ecosystems        Json         // Array of strings e.g. ["npm", "pypi"]
   spdxDoc           Json         // Valid SPDX 2.3 JSON document
+  cycloneDxDoc      Json?        // CycloneDX 1.6 document, stored from Day 6 scans; null for older SBOMs
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
