@@ -92,19 +92,34 @@ const COMPONENTS = [
 
   test('Version-range matcher: 4.17.10 matches CVE-2018-16487 only, not CVE-2018-3721; 4.17.11 matches neither', () => {
     const { cves } = parseNvdResponse(nvdBody);
-    assert.strictEqual(versionInRange('4.17.10', cves[0].cpeMatches[0]), false);
-    assert.strictEqual(versionInRange('4.17.10', cves[1].cpeMatches[0]), true);
-    assert.strictEqual(versionInRange('4.17.11', cves[1].cpeMatches[0]), false);
-    assert.strictEqual(versionInRange('4.17.4', cves[0].cpeMatches[0]), true);
+    assert.strictEqual(versionInRange('4.17.10', cves[0].cpeMatches[0], 'lodash'), false);
+    assert.strictEqual(versionInRange('4.17.10', cves[1].cpeMatches[0], 'lodash'), true);
+    assert.strictEqual(versionInRange('4.17.11', cves[1].cpeMatches[0], 'lodash'), false);
+    assert.strictEqual(versionInRange('4.17.4', cves[0].cpeMatches[0], 'lodash'), true);
+  });
+
+  test('Product filter (live-bug regression): an Oracle range ending at 9.2.6.0 must NOT match lodash 4.17.21', () => {
+    const oracleMatch = { criteria: 'cpe:2.3:a:oracle:jd_edwards_enterpriseone_tools:*:*:*:*:*:*:*:*', versionEndIncluding: '9.2.6.0' };
+    assert.strictEqual(versionInRange('4.17.21', oracleMatch, 'lodash'), false);
+    // ...while the same range WOULD numerically cover it without the filter:
+    assert.strictEqual(versionInRange('4.17.21', oracleMatch), true);
   });
 
   await testAsync('enrichComponent (stubbed fetch): matches only in-range CVE, caches second call without fetching', async () => {
     clearNvdCache();
     let calls = 0;
-    const stubFetch = async () => { calls++; return { ok: true, status: 200, json: async () => nvdBody }; };
+    // Inject an unrelated-product decoy: an Oracle range that numerically
+    // covers 4.17.10 must not pull CVE-2018-3721 into the result, and the
+    // returned cpeMatches must contain only the lodash match.
+    const decoyBody = JSON.parse(JSON.stringify(nvdBody));
+    decoyBody.vulnerabilities[0].cve.configurations[0].nodes[0].cpeMatch.push(
+      { criteria: 'cpe:2.3:a:oracle:jd_edwards_enterpriseone_tools:*:*:*:*:*:*:*:*', versionEndIncluding: '9.2.6.0' });
+    const stubFetch = async () => { calls++; return { ok: true, status: 200, json: async () => decoyBody }; };
     const first = await enrichComponent({ name: 'lodash', version: '4.17.10' }, stubFetch);
     assert.strictEqual(first.cached, false);
     assert.deepStrictEqual(first.cves.map((c) => c.cveId), ['CVE-2018-16487']);
+    assert.deepStrictEqual(first.cves[0].cpeMatches.map((m) => m.criteria),
+      ['cpe:2.3:a:lodash:lodash:*:*:*:*:*:node.js:*:*']);
     assert.ok(first.fetchedAt);
     const second = await enrichComponent({ name: 'lodash', version: '4.17.10' }, stubFetch);
     assert.strictEqual(second.cached, true);

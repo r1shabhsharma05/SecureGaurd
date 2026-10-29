@@ -40,7 +40,22 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function versionInRange(version, match) {
+function cpeProduct(criteria) {
+  const parts = String(criteria || '').split(':');
+  return (parts[4] || '').toLowerCase();
+}
+
+function versionInRange(version, match, componentName) {
+  // A CVE's configuration lists EVERY product it affects (lodash plus
+  // dozens of Oracle/Siemens products that embed it). A range belonging
+  // to a different product must never match this component: e.g. an
+  // Oracle range ending at 9.2.6.0 numerically "covers" lodash 4.17.21
+  // while saying nothing about lodash at all. Enforce product equality
+  // first (npm scope stripped: @scope/name matches product `name`).
+  if (componentName) {
+    const wanted = String(componentName).split('/').pop().toLowerCase();
+    if (cpeProduct(match.criteria) !== wanted) return false;
+  }
   const cpeVersion = (match.criteria || '').split(':')[5];
   if (cpeVersion && cpeVersion !== '*') {
     // CPE with an explicit version: exact match only.
@@ -115,8 +130,11 @@ async function enrichComponent({ name, version }, fetchImpl = fetch) {
     return { ...hit.result, cached: true };
   }
   const { totalResults, cves } = await queryNvd(name, fetchImpl);
-  const matched = cves.filter((c) =>
-    c.cpeMatches.some((m) => versionInRange(version, m)));
+  // Keep only the CPE matches that actually matched this component, so
+  // the response never implies an unrelated product's range is evidence.
+  const matched = cves
+    .map((c) => ({ ...c, cpeMatches: c.cpeMatches.filter((m) => versionInRange(version, m, name)) }))
+    .filter((c) => c.cpeMatches.length > 0);
   const result = {
     component: key,
     source: 'NVD API 2.0',
@@ -135,6 +153,6 @@ function clearNvdCache() {
 }
 
 module.exports = {
-  queryNvd, enrichComponent, parseNvdResponse, versionInRange,
+  queryNvd, enrichComponent, parseNvdResponse, versionInRange, cpeProduct,
   compareVersions, clearNvdCache, NVD_API,
 };
