@@ -13,6 +13,7 @@ import {
   Plus
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';
+import { useOrganization } from '../context/OrganizationContext';
 import './OnboardingWizard.css';
 
 interface RepositoryItem {
@@ -48,6 +49,7 @@ const STORAGE_KEY_PREFIX = 'sg_onboarding_state_';
 
 export const OnboardingWizard: React.FC = () => {
   const { user, accessToken, refreshSession, completeOnboarding } = useAuth();
+  const { activeOrg, inviteMember } = useOrganization();
   const navigate = useNavigate();
 
   // Redirect existing onboarded users away
@@ -345,6 +347,30 @@ export const OnboardingWizard: React.FC = () => {
     }
   };
 
+  // ── Step 5 State + Actions: Invite Team (Day 7 — the plan's 5th step;
+  // inviting is optional, skipping it never blocks finishing setup) ──
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('DEVELOPER');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [invitedEmails, setInvitedEmails] = useState<string[]>([]);
+
+  const handleInviteTeammate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    setInviteLoading(true);
+    setError('');
+    try {
+      await inviteMember(inviteEmail.trim(), inviteRole);
+      setInvitedEmails((prev) => [...prev, `${inviteEmail.trim()} (${inviteRole})`]);
+      setInviteEmail('');
+      setSuccess(`Invitation sent to ${inviteEmail.trim()}.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to send invitation.');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
   // ── Step 5 Actions: Finish Onboarding ──
   const handleFinishOnboarding = async () => {
     if (storageKey) localStorage.removeItem(storageKey);
@@ -389,7 +415,7 @@ export const OnboardingWizard: React.FC = () => {
             { num: 2, title: 'Select Repos' },
             { num: 3, title: 'First Scan' },
             { num: 4, title: 'Results' },
-            { num: 5, title: 'Complete' }
+            { num: 5, title: 'Invite Team' }
           ].map(s => (
             <div
               key={s.num}
@@ -742,42 +768,65 @@ export const OnboardingWizard: React.FC = () => {
                 <ArrowLeft size={16} /> Back
               </button>
               <button className="wizard-btn-pri" onClick={() => setStep(5)}>
-                Continue to Finish Setup <ArrowRight size={16} />
+                Continue to Invite Team <ArrowRight size={16} />
               </button>
             </div>
           </div>
         )}
 
-        {/* ── STEP 5: Setup Complete ── */}
+        {/* ── STEP 5: Invite Team (Day 7) — optional; Finish never waits on it ── */}
         {step === 5 && (
-          <div className="done-container">
-            <div className="done-icon-wrapper">
-              <ShieldCheck size={48} />
+          <div>
+            <div className="wizard-title-area">
+              <span className="wizard-step-badge">Step 5 of 5</span>
+              <h2 className="wizard-title">Invite Your Team</h2>
+              <p className="wizard-subtitle">
+                {activeOrg ? `Invite teammates to ${activeOrg.name} — they will get a real email invitation (Brevo) and join with the role you pick.` : 'Invite teammates to your organization — they will get a real email invitation and join with the role you pick.'}
+                {' '}Skip this step any time; you can invite from the dashboard later.
+              </p>
             </div>
 
-            <h2 className="wizard-title" style={{ fontSize: '2rem' }}>You're all set! 🚀</h2>
-            <p className="wizard-subtitle" style={{ maxWidth: '500px' }}>
-              SecureGuard is now active and guarding your codebase. You can manage your repositories, generate AI code fixes, and track scans from your dashboard.
-            </p>
+            <form onSubmit={handleInviteTeammate} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <input
+                type="email"
+                required
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="teammate@company.com"
+                style={{ flex: 1, minWidth: '220px', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.05)', color: 'inherit' }}
+              />
+              <select
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value)}
+                style={{ padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.05)', color: 'inherit' }}
+              >
+                <option value="DEVELOPER">Developer</option>
+                <option value="ADMIN">Admin</option>
+                <option value="AUDITOR">Auditor (read-only)</option>
+              </select>
+              <button className="wizard-btn-pri" type="submit" disabled={inviteLoading}>
+                {inviteLoading ? 'Sending…' : 'Send Invite'}
+              </button>
+            </form>
 
-            <div className="done-features-list">
-              <div className="done-feature-item">
-                <Check size={18} className="text-accent-green" /> Git Provider Integration Configured
+            {invitedEmails.length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                {invitedEmails.map((inv) => (
+                  <div key={inv} className="done-feature-item">
+                    <Check size={18} className="text-accent-green" /> Invited: {inv}
+                  </div>
+                ))}
               </div>
-              <div className="done-feature-item">
-                <Check size={18} className="text-accent-green" /> Repository Monitoring Enabled
-              </div>
-              <div className="done-feature-item">
-                <Check size={18} className="text-accent-green" /> Automated SAST &amp; Secret Scan Pipeline Ready
-              </div>
-              <div className="done-feature-item">
-                <Check size={18} className="text-accent-green" /> XGBoost False-Positive Suppression Active
-              </div>
+            )}
+
+            <div className="wizard-footer-actions">
+              <button className="wizard-btn-sec" onClick={() => setStep(4)}>
+                <ArrowLeft size={16} /> Back
+              </button>
+              <button className="wizard-btn-pri" onClick={handleFinishOnboarding}>
+                Finish Setup — Go to Dashboard <ArrowRight size={16} />
+              </button>
             </div>
-
-            <button className="wizard-btn-pri" onClick={handleFinishOnboarding} style={{ fontSize: '1rem', padding: '0.85rem 2.25rem' }}>
-              Go to Full Dashboard <ArrowRight size={18} />
-            </button>
           </div>
         )}
       </div>
