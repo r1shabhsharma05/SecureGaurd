@@ -4,6 +4,7 @@ pandas
 scikit-learn
 xgboost
 joblib
+shap
 schedule
 pydantic
 httpx
