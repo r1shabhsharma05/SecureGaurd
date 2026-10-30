@@ -6,7 +6,7 @@ import {
   CheckCircle2, XCircle, Clock, Activity,
   FileCode2, Zap, Settings, Database, BarChart3,
   Play, RefreshCw, Filter, ArrowUpRight,
-  Plus, X, Trash2, Globe, FileCheck, Users, CreditCard, Layers
+  Plus, X, Trash2, Globe, FileCheck, Users, CreditCard, Layers, Bell
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
@@ -16,6 +16,7 @@ import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 // keeping the initial Dashboard bundle small (vite flags >500 kB chunks).
 const ComplianceReports = lazy(() => import('./ComplianceReports'));
 const SbomPage = lazy(() => import('./SbomPage'));
+const AlertsSettings = lazy(() => import('./AlertsSettings'));
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
 import { apiUrl } from '../config/api';
@@ -671,6 +672,13 @@ export default function Dashboard() {
             <span>Billing & Usage</span>
           </button>
           <button
+            className={`dash-nav-item ${activeNav === 'alerts' ? 'active' : ''}`}
+            onClick={() => setActiveNav('alerts')}
+          >
+            <Bell size={17} />
+            <span>Alerts</span>
+          </button>
+          <button
             className={`dash-nav-item ${activeNav === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveNav('settings')}
           >
@@ -707,6 +715,7 @@ export default function Dashboard() {
               {activeNav === 'vulndb' && 'Vulnerability Database'}
               {activeNav === 'analytics' && 'Analytics'}
               {activeNav === 'compliance' && 'Compliance Reports'}
+              {activeNav === 'alerts' && 'Scan Alerts'}
               {activeNav === 'settings' && 'Account Settings'}
             </h1>
             <p className="dash-page-sub">
@@ -727,6 +736,7 @@ export default function Dashboard() {
               {activeNav === 'vulndb' && 'Exploration index of all detected system vulnerabilities'}
               {activeNav === 'analytics' && 'Interactive vulnerability and risk reporting breakdowns'}
               {activeNav === 'compliance' && 'Generate security compliance reports from your organization\'s scan results'}
+              {activeNav === 'alerts' && 'Slack + email alerts on scan completion and new critical findings'}
               {activeNav === 'settings' && 'Manage passwords and workspace configurations'}
             </p>
           </div>
@@ -1522,6 +1532,13 @@ export default function Dashboard() {
         {activeNav === 'sbom' && (
           <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading SBOM…</div>}>
             <SbomPage selectedRepoId={selectedRepo?.id} />
+          </Suspense>
+        )}
+
+        {/* ── Tab: Scan Alerts (Day 7) ── */}
+        {activeNav === 'alerts' && (
+          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading alerts…</div>}>
+            <AlertsSettings />
           </Suspense>
         )}
       </main>
