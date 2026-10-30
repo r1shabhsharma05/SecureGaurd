@@ -53,6 +53,8 @@ model Organization {
   sboms       Sbom[]
   auditLogs   AuditLog[]
   subscription Subscription?
+  alertSetting AlertSetting?
+  alertLogs    AlertLog[]
 }
 
 model Subscription {
@@ -283,4 +285,40 @@ model Sbom {
   @@index([organizationId])
   @@index([repositoryId])
   @@index([scanId])
+}
+
+// Day 7 — scan-completion alerts (opt-in per organization; no row = silent).
+// The Slack webhook URL is a bearer secret: stored encrypted (same
+// AES-256-GCM helper as PATs), never returned by any API — only a masked
+// form is stored in AlertLog rows and returned to clients.
+model AlertSetting {
+  id                   Int      @id @default(autoincrement())
+  organizationId       Int      @unique
+  slackWebhookUrl      String?
+  slackEnabled         Boolean  @default(false)
+  emailEnabled         Boolean  @default(false)
+  notifyOnScanComplete Boolean  @default(true)
+  notifyOnNewCritical  Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model AlertLog {
+  id           Int      @id @default(autoincrement())
+  organizationId Int
+  channel      String   // slack | email
+  event        String   // scan_completed | new_critical | test
+  targetMasked String?
+  status       String   // delivered | failed | skipped
+  providerId   String?
+  error        String?
+  createdAt    DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
 }

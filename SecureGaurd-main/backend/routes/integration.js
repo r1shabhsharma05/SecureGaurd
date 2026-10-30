@@ -225,6 +225,13 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         String(scan.id),
         { repoName: repo.fullName, platform, commitSha }
       );
+      // Day 7 — same opt-in alerts as the manual scan path (best-effort).
+      try {
+        const { dispatchScanAlerts } = require('../utils/scanAlerts');
+        await dispatchScanAlerts({ organizationId: repo.organizationId, scan, repository: repo });
+      } catch (alertErr) {
+        console.error('Webhook scan alert dispatch failed (scan itself succeeded):', alertErr.message);
+      }
     }
 
     if (scanTarget) scanTarget.cleanup();
@@ -346,41 +353,106 @@ router.get('/repos', async (req, res) => {
   }
 });
 
-// POST /api/integration/pr-bot: Simulate a PR Bot check response (with org context)
+// POST /api/integration/pr-bot: REAL PR bot (Day 7 — replaces the old
+// simulation, which returned prNumber || 42 and a localhost report URL).
+// With the user's connected GitHub PAT (stored encrypted, same helper as
+// the repo-import tokens), this posts a real check run on the commit AND
+// a real summary comment on the PR via the GitHub REST API, and returns
+// only the ids/URLs GitHub itself returns. No PAT => honest 400. GitHub
+// rejecting the call => its status surfaced, never a fabricated success.
+// A repo with no scan yet posts a check noting that honestly instead of
+// claiming a clean bill of health.
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const { repositoryId, commitSha, prNumber } = req.body;
-  if (!repositoryId || !commitSha) {
-    return res.status(400).json({ message: 'repositoryId and commitSha are required' });
+  if (!repositoryId || !commitSha || !prNumber) {
+    return res.status(400).json({ message: 'repositoryId, commitSha and prNumber are required' });
   }
 
   try {
+    const { parseRepoFullName, buildCheckRunPayload, buildPrCommentBody } = require('../utils/prBot');
     const repo = await prisma.repository.findFirst({
       where: { id: parseInt(repositoryId), organizationId: req.organizationId },
     });
     if (!repo) return res.status(404).json({ message: 'Repository not found in active organization' });
+    if (repo.platform !== 'github') {
+      return res.status(400).json({ message: 'PR bot currently supports GitHub repositories only' });
+    }
+    const parsed = parseRepoFullName(repo.fullName);
+    if (!parsed) return res.status(400).json({ message: 'Repository fullName is not in owner/repo form' });
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { githubToken: true } });
+    const pat = decrypt(user ? user.githubToken : null);
+    if (!pat) {
+      return res.status(400).json({ message: 'No GitHub token connected — connect a PAT in onboarding or settings first' });
+    }
 
     const scan = await prisma.scan.findFirst({
       where: { repositoryId: repo.id, organizationId: req.organizationId },
       orderBy: { createdAt: 'desc' },
-      include: { vulnerabilities: true }
     });
+    const criticalCount = scan ? scan.criticalCount : 0;
+    const highCount = scan ? scan.highCount : 0;
+    const mediumCount = scan ? scan.mediumCount : 0;
+    const lowCount = scan ? scan.lowCount : 0;
+    const isClean = Boolean(scan) && (criticalCount + highCount === 0);
+    const reportUrl = `${process.env.FRONTEND_URL || ''}/dashboard`.replace(/\/$/, '') || null;
 
-    const isClean = !scan || (scan.criticalCount + scan.highCount === 0);
-
-    const checkSummary = {
-      repository: repo.fullName,
-      commit: commitSha,
-      prNumber: prNumber || 42,
-      status: isClean ? 'success' : 'failure',
-      conclusion: isClean ? 'SecureGuard checklist passed!' : 'Vulnerabilities detected!',
-      issuesFound: scan ? scan.criticalCount + scan.highCount : 0,
-      reportUrl: `http://localhost:5173/dashboard`
+    const ghHeaders = {
+      'Authorization': `Bearer ${pat}`,
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'SecureGuard-App',
+      'Content-Type': 'application/json',
     };
+    const checkPayload = buildCheckRunPayload({ commitSha, isClean, criticalCount, highCount, reportUrl });
+    if (!scan) {
+      checkPayload.output.title = 'SecureGuard: no scan yet for this repository';
+      checkPayload.output.summary = 'No SecureGuard scan exists for this repository yet — run a scan first for a real verdict.';
+      checkPayload.conclusion = 'neutral';
+    }
+    const checkRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/check-runs`, {
+      method: 'POST', headers: ghHeaders, body: JSON.stringify(checkPayload),
+    });
+    if (!checkRes.ok) {
+      const body = (await checkRes.text()).slice(0, 300);
+      return res.status(502).json({ message: `GitHub rejected the check run (${checkRes.status})`, githubError: body });
+    }
+    const checkRun = await checkRes.json();
+
+    const commentBody = buildPrCommentBody({
+      repoFullName: repo.fullName, commitSha, isClean,
+      criticalCount, highCount, mediumCount, lowCount, reportUrl,
+    });
+    const commentRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${prNumber}/comments`, {
+      method: 'POST', headers: ghHeaders, body: JSON.stringify({ body: scan ? commentBody : `${commentBody}\n\n_Note: no SecureGuard scan exists for this repository yet — run a scan first for a real verdict._` }),
+    });
+    if (!commentRes.ok) {
+      const body = (await commentRes.text()).slice(0, 300);
+      // The check run is real and already posted; report the partial
+      // outcome honestly instead of claiming full success or hiding it.
+      return res.status(502).json({
+        message: `Check run posted, but GitHub rejected the PR comment (${commentRes.status})`,
+        githubError: body,
+        checkRun: { id: checkRun.id, html_url: checkRun.html_url, conclusion: checkRun.conclusion },
+      });
+    }
+    const comment = await commentRes.json();
+
+    await createAuditLog(
+      req.organizationId, req.userId, 'PR_BOT_POSTED', 'REPOSITORY', String(repo.id),
+      { prNumber, commitSha, checkRunId: checkRun.id, commentId: comment.id, conclusion: checkRun.conclusion }
+    );
 
     res.json({
-      message: 'PR Bot check simulated successfully',
-      botReport: checkSummary
+      message: 'PR Bot check posted to GitHub',
+      botReport: {
+        repository: repo.fullName,
+        commit: commitSha,
+        prNumber,
+        scanId: scan ? scan.id : null,
+        checkRun: { id: checkRun.id, html_url: checkRun.html_url, conclusion: checkRun.conclusion },
+        comment: { id: comment.id, html_url: comment.html_url },
+      },
     });
   } catch (err) {
     console.error(err);

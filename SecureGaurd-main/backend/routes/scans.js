@@ -435,6 +435,15 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
       { repoName: repo.name, findingsCount: finalFindings.length, criticalCount: critCount }
     );
 
+    // Day 7 — opt-in scan-completion alerts (Slack + email). Best-effort:
+    // the dispatcher never throws, so a failed alert cannot fail a scan.
+    try {
+      const { dispatchScanAlerts } = require('../utils/scanAlerts');
+      await dispatchScanAlerts({ organizationId: req.organizationId, scan, repository: repo });
+    } catch (alertErr) {
+      console.error('Scan alert dispatch failed (scan itself succeeded):', alertErr.message);
+    }
+
     if (scanTarget) scanTarget.cleanup();
     res.status(201).json({ scan, message: `Scan completed. Evaluated ${scanResult.totalFiles} files. Found ${finalFindings.length} real issues.` });
   } catch (err) {
