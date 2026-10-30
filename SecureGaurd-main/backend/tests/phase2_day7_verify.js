@@ -94,5 +94,40 @@ test('PR bot: comment body carries repo, commit, counts, report link', () => {
   assert.ok(!clean.includes('Report:'));
 });
 
+// Day 7 live-bug fix — cryptoUtils key derivation. The old code passed
+// ENCRYPTION_KEY (a string) straight to createCipheriv, which throws
+// "Invalid key length" for anything but a 32-byte Buffer — every prod
+// encrypt() failed (500 on alert-settings save and PAT save). Each case
+// re-requires the module so deriveKey runs against that case's env.
+function loadCrypto() {
+  delete require.cache[require.resolve('../utils/cryptoUtils')];
+  return require('../utils/cryptoUtils');
+}
+test('crypto: JWT_SECRET fallback key round-trips', () => {
+  delete process.env.ENCRYPTION_KEY;
+  process.env.JWT_SECRET = 'test-jwt-secret-for-day7-unit';
+  const { encrypt, decrypt } = loadCrypto();
+  const cipher = encrypt('https://hooks.slack.com/services/T000/B000/EXAMPLE');
+  assert.ok(cipher.split(':').length === 3);
+  assert.strictEqual(decrypt(cipher), 'https://hooks.slack.com/services/T000/B000/EXAMPLE');
+});
+test('crypto: 64-hex ENCRYPTION_KEY round-trips (hex-decoded 32 bytes)', () => {
+  process.env.ENCRYPTION_KEY = 'ab'.repeat(32);
+  const { encrypt, decrypt } = loadCrypto();
+  assert.strictEqual(decrypt(encrypt('ghp_test-token-value')), 'ghp_test-token-value');
+});
+test('crypto: passphrase ENCRYPTION_KEY round-trips (sha256-derived)', () => {
+  process.env.ENCRYPTION_KEY = 'some-operator-passphrase';
+  const { encrypt, decrypt } = loadCrypto();
+  assert.strictEqual(decrypt(encrypt('my-pat-value')), 'my-pat-value');
+  const { encrypt: enc2, decrypt: dec2 } = loadCrypto();
+  assert.strictEqual(dec2(enc2('repeatable-across-require')), 'repeatable-across-require');
+});
+test('crypto: decrypt of garbage returns it unchanged (legacy fallback)', () => {
+  const { decrypt } = loadCrypto();
+  assert.strictEqual(decrypt('not-encrypted-legacy'), 'not-encrypted-legacy');
+  assert.strictEqual(decrypt(''), '');
+});
+
 console.log(`\nDay 7 unit: ${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

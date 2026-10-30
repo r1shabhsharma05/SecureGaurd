@@ -143,8 +143,11 @@ router.get('/:id/explanation', async (req, res) => {
     const CLASSIFIER_URL = process.env.FP_CLASSIFIER_URL || 'http://localhost:8001';
     const headers = { 'Content-Type': 'application/json' };
     if (process.env.CLASSIFIER_API_KEY) headers['X-SecureGuard-Key'] = process.env.CLASSIFIER_API_KEY;
+    // 30 s, not 8 s: the classifier runs on Render's free tier and a cold
+    // start can exceed 8 s; aborting that fast turned a slow-but-live
+    // classifier into a false 502 (seen in the Day 7 live probe).
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
     let clfRes;
     try {
       clfRes = await fetch(`${CLASSIFIER_URL}/classify?include_explanation=true`, {
