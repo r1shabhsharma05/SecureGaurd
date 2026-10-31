@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { useOrganization } from '../context/OrganizationContext';
+import { SkeletonCard } from './Skeleton';
 
 interface AlertSetting {
   configured: boolean;
@@ -108,8 +109,8 @@ export default function AlertsSettings() {
 
   if (loading) {
     return (
-      <div style={{ padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-        <RefreshCw size={14} className="spin-icon" style={{ display: 'inline', marginRight: '8px' }} />Loading alerts…
+      <div style={{ padding: '1rem 0' }}>
+        <SkeletonCard />
       </div>
     );
   }

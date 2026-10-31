@@ -6,6 +6,10 @@ import {
 } from 'lucide-react';
 import { useOrganization } from '../context/OrganizationContext';
 import { toErrorMessage } from '../services/ApiError';
+import { useToast } from './Toast';
+import { trackEvent } from '../utils/analytics';
+import { SkeletonTable } from './Skeleton';
+import EmptyState from './EmptyState';
 import './ComplianceReports.css';
 
 interface Repository {
@@ -82,6 +86,7 @@ const FRAMEWORKS = [
 
 export default function ComplianceReports({ accessToken, refreshSession, repos }: Props) {
   const { activeOrgId, orgFetch } = useOrganization();
+  const { pushToast } = useToast();
   const [reports, setReports] = useState<ComplianceReportItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -159,6 +164,7 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
         setIsCreateModalOpen(false);
         setCustomReportName('');
         await fetchReports();
+        trackEvent('report_generated', { framework: selectedFramework });
         // Automatically open preview for the generated report
         openPreview(newReport.id);
       } else {
@@ -221,7 +227,7 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
         a.remove();
         window.URL.revokeObjectURL(url);
       } else {
-        alert('Failed to download PDF report');
+        pushToast('error', 'Failed to download PDF report');
       }
     } catch (err) {
       console.error('Error downloading PDF:', err);
@@ -246,7 +252,7 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
         a.remove();
         window.URL.revokeObjectURL(url);
       } else {
-        alert('Failed to download JSON report');
+        pushToast('error', 'Failed to download JSON report');
       }
     } catch (err) {
       console.error('Error downloading JSON:', err);
@@ -362,29 +368,19 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
 
       {/* ── Report History List / Table ── */}
       {loading ? (
-        <div className="compliance-loading">
-          <RefreshCw size={24} className="spin-icon" />
-          <p>Loading compliance reports…</p>
-        </div>
+        <SkeletonTable rows={4} />
       ) : filteredReports.length === 0 ? (
-        <div className="compliance-empty">
-          <div className="empty-icon-wrap">
-            <FileCheck size={40} />
-          </div>
-          <h3>No Compliance Reports Found</h3>
-          <p>
-            {searchQuery || selectedFrameworkFilter !== 'ALL'
+        <EmptyState
+          icon={<FileCheck size={40} />}
+          title="No Compliance Reports Found"
+          body={
+            searchQuery || selectedFrameworkFilter !== 'ALL'
               ? 'No reports match your current search/filter parameters.'
-              : 'You have not generated any security compliance reports yet. Select a repository to generate your first audit report.'}
-          </p>
-          <button
-            className="compliance-btn-primary"
-            onClick={() => setIsCreateModalOpen(true)}
-            style={{ marginTop: '1rem' }}
-          >
-            <Plus size={16} /> Create First Report
-          </button>
-        </div>
+              : 'You have not generated any security compliance reports yet. Select a repository to generate your first audit report.'
+          }
+          actionLabel="Create First Report"
+          onAction={() => setIsCreateModalOpen(true)}
+        />
       ) : (
         <div className="compliance-table-wrap">
           <table className="compliance-table">

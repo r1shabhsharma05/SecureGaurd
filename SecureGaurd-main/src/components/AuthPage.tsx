@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Eye, EyeOff, Loader2, Mail, ArrowRight } from 'lucide
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { requestPasswordReset, resetPassword } from '../services/authService';
+import { trackEvent } from '../utils/analytics';
 import './AuthPage.css';
 
 interface AuthPageProps {
@@ -78,6 +79,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
       } else {
         await register(firstName, lastName, email, password);
         setSuccess('Account created! Redirecting to setup…');
+        trackEvent('signup_completed');
         // New users always go to onboarding
         setTimeout(() => navigate('/onboarding'), 1000);
       }
@@ -204,7 +206,9 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
                   {agreed && <Check size={12} strokeWidth={3} />}
                 </div>
                 <span className="checkbox-label">
-                  I agree to the <a href="#">Terms of Service</a> &amp; <a href="#">Privacy Policy</a>
+                  {/* Day 8: Privacy Policy / Terms pages are Day 9's scope — no
+                      dead links until those pages exist. */}
+                  I agree to the Terms of Service &amp; Privacy Policy
                 </span>
               </div>
             )}
