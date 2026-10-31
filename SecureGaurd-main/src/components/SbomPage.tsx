@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { useOrganization } from '../context/OrganizationContext';
 import { useNavigate } from 'react-router-dom';
+import { SkeletonCard } from './Skeleton';
+import EmptyState from './EmptyState';
 
 interface SbomComponent {
   SPDXID: string;
@@ -203,29 +205,20 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
 
   if (loading) {
     return (
-      <div className="sbom-loading-container" style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
-        <div className="spinner" style={{ margin: '0 auto 1rem auto' }} />
-        <p>Analyzing Software Bill of Materials (SBOM)...</p>
+      <div style={{ padding: '1rem 0' }}>
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
 
   if (sboms.length === 0) {
     return (
-      <div className="sbom-empty-card" style={{
-        background: 'rgba(30, 41, 59, 0.5)',
-        border: '1px border var(--border-color)',
-        borderRadius: '12px',
-        padding: '3rem',
-        textAlign: 'center',
-        margin: '1.5rem 0'
-      }}>
-        <Layers size={48} style={{ color: '#64748b', marginBottom: '1rem' }} />
-        <h3 style={{ fontSize: '1.25rem', color: '#f8fafc', marginBottom: '0.5rem' }}>No SBOM Available Yet</h3>
-        <p style={{ color: '#94a3b8', maxWidth: '500px', margin: '0 auto 1.5rem auto' }}>
-          Run a security scan on your repository to automatically generate an industry-standard SPDX 2.3 Software Bill of Materials.
-        </p>
-      </div>
+      <EmptyState
+        icon={<Layers size={48} />}
+        title="No SBOM Available Yet"
+        body="Run a security scan on your repository to automatically generate an industry-standard SPDX 2.3 Software Bill of Materials."
+      />
     );
   }
 

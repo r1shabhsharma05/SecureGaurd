@@ -3,6 +3,7 @@ import { useOrganization } from '../context/OrganizationContext';
 import { useAuth } from '../context/AuthContext';
 import { Check, AlertCircle } from 'lucide-react';
 import { toErrorMessage } from '../services/ApiError';
+import { Skeleton } from './Skeleton';
 import './OrganizationSettingsModal.css';
 
 interface Props {
@@ -340,7 +341,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
           {activeTab === 'billing' && (
             <div className="tab-content">
               {loadingBilling && !billingData ? (
-                <div className="empty-state">Loading subscription and usage data...</div>
+                <Skeleton height="6rem" label="Loading subscription and usage data" />
               ) : billingData ? (
                 <div className="billing-tab-container">
                   {/* Current Subscription Card */}
@@ -518,7 +519,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     <div className="invoices-section">
                       <h4 className="plans-heading">Invoices</h4>
                       {loadingInvoices ? (
-                        <div className="empty-state">Loading invoices...</div>
+                        <Skeleton height="3rem" label="Loading invoices" />
                       ) : invoices.length === 0 ? (
                         <div className="empty-state">No invoices yet — invoices appear here after your first payment.</div>
                       ) : (
