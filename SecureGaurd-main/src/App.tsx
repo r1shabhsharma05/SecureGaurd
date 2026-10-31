@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate, useSearchParams } from 'react-router-dom'
+import { MotionConfig } from 'framer-motion'
 import './index.css'
 import Navbar from './components/Navbar'
 import Hero from './components/Hero'
@@ -14,6 +15,12 @@ import VulnerabilityDetailsPage from './components/VulnerabilityDetailsPage'
 import { AcceptInvitePage } from './components/AcceptInvitePage'
 import { ResetPasswordPage } from './components/ResetPasswordPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ToastProvider } from './components/Toast'
+import { ConsentProvider } from './components/CookieConsent'
+import PageMeta from './components/PageMeta'
+import Breadcrumbs from './components/Breadcrumbs'
+import ContactForm from './components/ContactForm'
+import NotFound from './components/NotFound'
 
 function Home() {
   return (
@@ -25,6 +32,28 @@ function Home() {
         <HowItWorks />
         <Pricing />
         <CTA />
+      </main>
+      <Footer />
+    </>
+  )
+}
+
+function ContactPage() {
+  return (
+    <>
+      <Navbar />
+      <main className="contact-page">
+        <div className="container">
+          <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: 'Contact' }]} />
+          <h1>Contact us</h1>
+          <p className="contact-page-intro">
+            Questions about SecureGuard, pricing, or a security review? Send us a message
+            and the team will reply by email. New to SecureGuard?{' '}
+            <a href="/signup">Create a free account</a> or read{' '}
+            <a href="/#features">how it works</a> first.
+          </p>
+          <ContactForm />
+        </div>
       </main>
       <Footer />
     </>
@@ -54,20 +83,31 @@ function ResetPasswordRouteHandler() {
 
 function App() {
   return (
-    <Router>
-      <ErrorBoundary>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
-          <Route path="/login" element={<AuthPage defaultMode="login" />} />
-          <Route path="/onboarding" element={<OnboardingWizard />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
-          <Route path="/accept-invite" element={<InviteRouteHandler />} />
-          <Route path="/reset-password" element={<ResetPasswordRouteHandler />} />
-        </Routes>
-      </ErrorBoundary>
-    </Router>
+    <ToastProvider>
+      <ConsentProvider>
+        <Router>
+          {/* Day 8: all framer-motion animations respect the OS
+              reduced-motion setting; GSAP entrances check it directly. */}
+          <MotionConfig reducedMotion="user">
+            <ErrorBoundary>
+              <PageMeta />
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
+                <Route path="/login" element={<AuthPage defaultMode="login" />} />
+                <Route path="/contact" element={<ContactPage />} />
+                <Route path="/onboarding" element={<OnboardingWizard />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
+                <Route path="/accept-invite" element={<InviteRouteHandler />} />
+                <Route path="/reset-password" element={<ResetPasswordRouteHandler />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
+          </MotionConfig>
+        </Router>
+      </ConsentProvider>
+    </ToastProvider>
   )
 }
 

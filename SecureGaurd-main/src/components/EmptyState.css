@@ -1,0 +1,25 @@
+/* Day 8 — shared empty state. */
+.empty-state {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  border: 1px dashed var(--border-color, #27272a);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-card, #0c0c0e);
+}
+.empty-state-icon { margin-bottom: 0.75rem; color: var(--text-dim, #a1a1aa); }
+.empty-state-title { margin: 0; font-size: 1.05rem; }
+.empty-state-body { margin: 0.5rem auto 0; max-width: 30rem; font-size: 0.88rem; color: var(--text-dim, #a1a1aa); line-height: 1.55; }
+.empty-state-action {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #27272a);
+  background: var(--accent-blue, #0055ff);
+  border-color: var(--accent-blue, #0055ff);
+  color: #fff;
+  font: inherit;
+  font-size: 0.88rem;
+  text-decoration: none;
+  cursor: pointer;
+}

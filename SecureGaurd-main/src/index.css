@@ -1,5 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap');
-
+/* Fonts load from the <link> in index.html (preconnect + display=swap).
+   The old @import here was render-blocking. */
 :root {
   --bg-deep: #000000;
   --bg-surface: #09090B;
@@ -136,4 +136,18 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--primary);
+}
+
+/* Day 8 — reduced motion: honor prefers-reduced-motion everywhere.
+   GSAP entrances check the same preference in JS; framer-motion is
+   covered by <MotionConfig reducedMotion="user"> in App.tsx. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

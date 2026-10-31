@@ -1,0 +1,18 @@
+/* Day 8 — breadcrumb navigation. */
+.breadcrumbs { margin-bottom: 1rem; }
+.breadcrumbs-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.82rem;
+  color: var(--text-dim, #a1a1aa);
+}
+.breadcrumbs-item { display: flex; align-items: center; gap: 0.35rem; }
+.breadcrumbs-item a { color: var(--text-dim, #a1a1aa); text-decoration: none; }
+.breadcrumbs-item a:hover { color: var(--text-main, #fff); text-decoration: underline; }
+.breadcrumbs-item [aria-current="page"] { color: var(--text-main, #fff); }
+.breadcrumbs-separator { opacity: 0.6; }

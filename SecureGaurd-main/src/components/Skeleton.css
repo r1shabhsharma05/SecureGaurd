@@ -1,0 +1,42 @@
+/* Day 8 — shared loading skeletons (shimmer off under reduced motion). */
+.skeleton {
+  display: block;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  background: #17171a;
+  overflow: hidden;
+  position: relative;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-card {
+  padding: 1rem;
+  border: 1px solid var(--border-color, #27272a);
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-card, #0c0c0e);
+}
+
+.skeleton-page { padding: 1rem 0; }
+
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+@keyframes skeleton-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after { animation: none; }
+}

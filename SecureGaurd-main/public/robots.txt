@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /onboarding
+Disallow: /accept-invite
+Disallow: /reset-password
+
+Sitemap: https://secureguard-main.vercel.app/sitemap.xml
