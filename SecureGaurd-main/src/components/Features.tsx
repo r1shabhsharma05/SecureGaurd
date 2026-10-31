@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 import { Shield, Zap, Eye, Lock, GitBranch, Bell } from 'lucide-react';
 import './Features.css';
 
@@ -59,6 +60,8 @@ export default function Features() {
   const sectionRef = useRef(null);
 
   useEffect(() => {
+    // Day 8: skip the scroll-triggered entrance under reduced motion.
+    if (prefersReducedMotion()) return;
     gsap.fromTo('.features-header',
       { opacity: 0, y: 40 },
       {

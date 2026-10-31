@@ -97,6 +97,23 @@
   transition: color 0.25s;
 }
 
+/* Day 8: the Cookie Settings control is a button that must look like the
+   footer links around it. */
+.footer-link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.87rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.25s;
+}
+
+.footer-link-button:hover {
+  color: var(--text-main);
+}
+
 .footer-col a:hover {
   color: var(--text-main);
 }

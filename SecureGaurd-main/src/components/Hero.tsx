@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useInView, animate } from 'framer-motion';
 import { gsap } from 'gsap';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 import { Shield, ArrowRight, Play } from 'lucide-react';
 import './Hero.css';
 
@@ -59,6 +60,10 @@ export default function Hero() {
   const scanRef = useRef(null);
 
   useEffect(() => {
+    // Day 8: under prefers-reduced-motion, skip the GSAP entrance + pulse
+    // entirely — content renders in its final state. (framer-motion parts
+    // are covered by <MotionConfig reducedMotion="user"> in App.tsx.)
+    if (prefersReducedMotion()) return;
     const tl = gsap.timeline({ delay: 0.8 });
     tl.fromTo('.hero-badge', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: 'back.out(1.7)' })
       .fromTo('.hero-headline', { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: 'power3.out' }, '-=0.2')

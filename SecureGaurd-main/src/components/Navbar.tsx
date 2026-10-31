@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { gsap } from 'gsap';
 import { useAuth } from '../context/AuthContext';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 import './Navbar.css';
 
 const NAV_LINKS = [
@@ -18,10 +19,14 @@ export default function Navbar() {
   const { user, logout } = useAuth();
 
   useEffect(() => {
-    gsap.fromTo(navRef.current,
-      { y: -80, opacity: 0 },
-      { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out', delay: 0.2 }
-    );
+    // Day 8: skip the entrance animation under prefers-reduced-motion —
+    // the nav renders in its final state instead of animating in.
+    if (!prefersReducedMotion()) {
+      gsap.fromTo(navRef.current,
+        { y: -80, opacity: 0 },
+        { y: 0, opacity: 1, duration: 0.8, ease: 'power3.out', delay: 0.2 }
+      );
+    }
 
     const handleScroll = () => setScrolled(window.scrollY > 50);
     window.addEventListener('scroll', handleScroll);
@@ -37,7 +42,10 @@ export default function Navbar() {
     <nav ref={navRef} className={`navbar ${scrolled ? 'scrolled' : ''}`}>
       <div className="navbar-inner container">
         <a href="/" className="navbar-logo">
-          <img src="/logo.png" alt="SecureGuard Logo" className="logo-img" />
+          <picture>
+            <source srcSet="/logo.webp" type="image/webp" />
+            <img src="/logo.png" alt="SecureGuard Logo" className="logo-img" width={32} height={32} />
+          </picture>
           <span>Secure<strong>Guard</strong></span>
         </a>
 

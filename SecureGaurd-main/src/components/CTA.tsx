@@ -55,13 +55,15 @@ export default function CTA() {
               Start Free Trial
               <ArrowRight size={16} />
             </MotionLink>
-            <a href="#" className="cta-link">
+            <Link to="/contact" className="cta-link">
               Talk to Sales →
-            </a>
+            </Link>
           </div>
 
           <div className="cta-badges">
-            {['SOC 2 Type II', 'GDPR Compliant', 'ISO 27001', 'No data training'].map(b => (
+            {/* Day 8: badges name the compliance REPORTS the product generates,
+                not certifications it does not hold. */}
+            {['Compliance reports: SOC 2 · HIPAA · PCI DSS · GDPR', 'No data training'].map(b => (
               <span key={b} className="cta-badge">
                 <span className="cta-badge-dot" />
                 {b}
