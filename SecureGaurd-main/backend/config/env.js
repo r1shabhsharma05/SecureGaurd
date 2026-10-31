@@ -28,6 +28,7 @@ const OPTIONAL_VARS = [
   { name: 'GEMINI_API_KEY', why: 'AI fix engine: official Gemini API' },
   { name: 'GEMINI_WEB2API_KEY', why: 'AI fix engine: web2api proxy bearer token' },
   { name: 'GEMINI_WEB2API_URL', why: 'AI fix engine: web2api proxy base URL' },
+  { name: 'CONTACT_EMAIL', why: 'recipient for contact-form messages (defaults to the EMAIL_FROM address)' },
   { name: 'FP_CLASSIFIER_URL', why: 'Python ML false-positive classifier service URL' },
   { name: 'CLASSIFIER_API_KEY', why: 'auth token for the FP classifier service' },
 ];

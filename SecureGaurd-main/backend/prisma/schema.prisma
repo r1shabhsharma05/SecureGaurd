@@ -322,3 +322,32 @@ model AlertLog {
 
   @@index([organizationId, createdAt])
 }
+
+// Day 8 — product analytics (own DB, consent-gated on the client) and
+// contact-form messages. AnalyticsEvent stores no IP and no client-supplied
+// user identity; ContactMessage rows are written only after Brevo accepts
+// the email, so a row always means a real message was delivered.
+model AnalyticsEvent {
+  id        Int      @id @default(autoincrement())
+  event     String
+  path      String
+  sessionId String?
+  props     Json?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([createdAt])
+}
+
+model ContactMessage {
+  id         Int      @id @default(autoincrement())
+  name       String
+  email      String
+  subject    String?
+  message    String
+  providerId String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}

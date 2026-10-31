@@ -30,6 +30,7 @@ const billingWebhookRoutes = require('./routes/billingWebhook');
 const billingRoutes = require('./routes/billing');
 const sbomRoutes = require('./routes/sboms');
 const alertRoutes = require('./routes/alerts');
+const publicRoutes = require('./routes/public');
 const prisma = require('./prismaClient');
 const { getAllowedOrigins } = require('./config/cors');
 
@@ -84,6 +85,7 @@ app.use('/api/invitations', invitationRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/sboms', sbomRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api', publicRoutes);
 
 // Test PostgreSQL connection
 prisma.$connect()
