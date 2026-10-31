@@ -10,6 +10,11 @@ import {
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
+import { useToast } from './Toast';
+import { trackEvent } from '../utils/analytics';
+import Breadcrumbs from './Breadcrumbs';
+import EmptyState from './EmptyState';
+import { PageSkeleton } from './Skeleton';
 import { OrganizationSwitcher } from './OrganizationSwitcher';
 import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 // Tab pages are code-split: they load on demand when their tab opens,
@@ -110,6 +115,9 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { user, accessToken, loading: authLoading, refreshSession, logout } = useAuth();
   const { activeOrg, activeOrgId, activeRole, orgFetch } = useOrganization();
+  const { pushToast } = useToast();
+  // Day 8: initial data load shows a skeleton instead of zeros/empty lists.
+  const [dataLoading, setDataLoading] = useState(true);
   
   // Navigation
   const [activeNav, setActiveNav] = useState('overview');
@@ -185,6 +193,7 @@ export default function Dashboard() {
   // Memoized so effects can safely list it as a dependency (react-hooks/exhaustive-deps)
   const fetchData = useCallback(async () => {
     if (!accessToken) return;
+    setDataLoading(true);
     try {
       // 1. Fetch repositories
       const reposRes = await orgFetch('/api/repos');
@@ -246,6 +255,8 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
+    } finally {
+      setDataLoading(false);
     }
   }, [accessToken, orgFetch]);
 
@@ -267,12 +278,12 @@ export default function Dashboard() {
         () => accessToken
       );
       if (res.ok) {
-        alert(`${platform.toUpperCase()} Token successfully updated!`);
+        pushToast('success', `${platform.toUpperCase()} Token successfully updated!`);
         if (platform === 'github') setGithubToken('');
         if (platform === 'gitlab') setGitlabToken('');
         fetchData();
       } else {
-        alert('Failed to update integration tokens.');
+        pushToast('error', 'Failed to update integration tokens.');
       }
     } catch (err) {
       console.error(err);
@@ -366,7 +377,7 @@ export default function Dashboard() {
         fetchData();
       } else {
         const errData = await res.json();
-        alert(errData.message || 'Failed to connect repository.');
+        pushToast('error', errData.message || 'Failed to connect repository.');
       }
     } catch (err) {
       console.error(err);
@@ -384,7 +395,7 @@ export default function Dashboard() {
         fetchData();
       } else {
         const errData = await res.json();
-        alert(errData.message || 'Failed to delete repository.');
+        pushToast('error', errData.message || 'Failed to delete repository.');
       }
     } catch (err) {
       console.error(err);
@@ -419,6 +430,7 @@ export default function Dashboard() {
             });
             if (res.ok) {
               await fetchData();
+              trackEvent('scan_started', { repositoryId: selectedRepo.id });
             }
           } catch (err) {
             console.error(err);
@@ -466,7 +478,7 @@ export default function Dashboard() {
         });
         fetchData();
       } else {
-        alert('Failed to generate AI fix.');
+        pushToast('error', 'Failed to generate AI fix.');
       }
     } catch (err) {
       console.error(err);
@@ -486,10 +498,11 @@ export default function Dashboard() {
           }
           return prev;
         });
-        alert('AI Fix applied successfully!');
+        pushToast('success', 'AI Fix applied successfully!');
+        trackEvent('ai_fix_applied', { vulnerabilityId: vulnId });
         fetchData();
       } else {
-        alert('Failed to apply AI fix.');
+        pushToast('error', 'Failed to apply AI fix.');
       }
     } catch (err) {
       console.error(err);
@@ -507,10 +520,10 @@ export default function Dashboard() {
           }
           return prev;
         });
-        alert('Finding marked as false positive.');
+        pushToast('success', 'Finding marked as false positive.');
         fetchData();
       } else {
-        alert('Failed to update finding.');
+        pushToast('error', 'Failed to update finding.');
       }
     } catch (err) {
       console.error(err);
@@ -518,6 +531,17 @@ export default function Dashboard() {
   };
 
   // ── Computations ──
+  const NAV_TITLES: Record<string, string> = {
+    overview: 'Security Overview',
+    repos: 'Repositories',
+    scans: 'Scan Log History',
+    vulndb: 'Vulnerability Database',
+    analytics: 'Analytics',
+    compliance: 'Compliance Reports',
+    alerts: 'Scan Alerts',
+    settings: 'Account Settings',
+  };
+  const navTitle = NAV_TITLES[activeNav] ?? 'Dashboard';
   const totalCrit  = stats.critical;
   const totalHigh  = stats.high;
   const totalMed   = stats.medium;
@@ -708,6 +732,7 @@ export default function Dashboard() {
         {/* Header */}
         <header className="dash-header">
           <div className="dash-header-left">
+            <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: navTitle }]} />
             <h1 className="dash-page-title">
               {activeNav === 'overview' && 'Security Overview'}
               {activeNav === 'repos' && 'Repositories'}
@@ -786,6 +811,12 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Day 8: while the first data load is in flight, show a skeleton
+            instead of zeros and empty tables. */}
+        {dataLoading ? (
+          <PageSkeleton />
+        ) : (
+          <>
         {/* ── Tab: Overview ── */}
         {activeNav === 'overview' && (
           <>
@@ -1227,6 +1258,15 @@ export default function Dashboard() {
               <h2 className="tab-title font-heading">Security Audit Scan Logs</h2>
             </div>
 
+            {scans.length === 0 ? (
+              <EmptyState
+                icon={<Shield size={40} />}
+                title="No scans yet"
+                body="Run your first security scan from the Overview tab to see the audit history here."
+                actionLabel="Go to Overview"
+                onAction={() => setActiveNav('overview')}
+              />
+            ) : (
             <table className="scan-history-table">
               <thead>
                 <tr>
@@ -1270,6 +1310,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            )}
           </div>
         )}
 
@@ -1508,7 +1549,7 @@ export default function Dashboard() {
               <button
                 className="connect-repo-btn"
                 style={{marginTop:'0.75rem'}}
-                onClick={() => navigator.clipboard.writeText(CI_CD_YAML).then(() => alert('Copied to clipboard!'))}
+                onClick={() => navigator.clipboard.writeText(CI_CD_YAML).then(() => pushToast('success', 'Copied to clipboard!'))}
               >
                 Copy YAML
               </button>
@@ -1519,7 +1560,7 @@ export default function Dashboard() {
 
         {/* ── Tab: Compliance Reports ── */}
         {activeNav === 'compliance' && (
-          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading reports…</div>}>
+          <Suspense fallback={<PageSkeleton />}>
             <ComplianceReports
               accessToken={accessToken}
               refreshSession={refreshSession}
@@ -1530,16 +1571,18 @@ export default function Dashboard() {
 
         {/* ── Tab: Software Bill of Materials (SBOM) ── */}
         {activeNav === 'sbom' && (
-          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading SBOM…</div>}>
+          <Suspense fallback={<PageSkeleton />}>
             <SbomPage selectedRepoId={selectedRepo?.id} />
           </Suspense>
         )}
 
         {/* ── Tab: Scan Alerts (Day 7) ── */}
         {activeNav === 'alerts' && (
-          <Suspense fallback={<div style={{padding: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem'}}><RefreshCw size={14} className="spin-icon" style={{display: 'inline', marginRight: '8px'}} />Loading alerts…</div>}>
+          <Suspense fallback={<PageSkeleton />}>
             <AlertsSettings />
           </Suspense>
+        )}
+          </>
         )}
       </main>
 
