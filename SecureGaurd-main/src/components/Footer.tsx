@@ -4,9 +4,8 @@ import './Footer.css';
 
 // Day 8 — footer links are all real destinations. The previous footer linked
 // every item to "#" and claimed "SOC 2 Certified / ISO 27001" badges the
-// product does not hold; both are fixed here. Privacy Policy and Terms of
-// Service pages are Day 9's scope and are deliberately NOT linked until
-// they exist — no dead links.
+// product does not hold; both are fixed here. Day 9 adds the Privacy Policy
+// and Terms of Service pages, so they are linked here and in signup.
 const GITHUB_REPO_URL = 'https://github.com/r1shabhsharma05/SecureGaurd';
 
 const COLUMNS: Array<{ title: string; links: Array<{ label: string; to?: string; href?: string }> }> = [
@@ -82,6 +81,12 @@ export default function Footer() {
             <div className="footer-col">
               <h4 className="footer-col-title">Privacy</h4>
               <ul>
+                <li>
+                  <Link to="/privacy">Privacy Policy</Link>
+                </li>
+                <li>
+                  <Link to="/terms">Terms of Service</Link>
+                </li>
                 <li>
                   <button type="button" className="footer-link-button" onClick={openPreferences}>
                     Cookie Settings

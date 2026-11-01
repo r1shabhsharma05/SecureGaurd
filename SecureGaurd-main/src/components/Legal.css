@@ -1,0 +1,60 @@
+/* Day 9 — legal pages (Privacy Policy / Terms of Service). Plain readable
+   layout reusing the site container; no marketing styling. */
+.legal-page {
+  padding: 3rem 1rem 4rem;
+  color: var(--text-main, #e8eaf0);
+}
+
+.legal-page h1 {
+  font-size: 2rem;
+  margin: 1rem 0 0.25rem;
+}
+
+.legal-updated {
+  color: var(--text-dim, #9aa0b4);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+}
+
+.legal-intro {
+  font-size: 1rem;
+  line-height: 1.65;
+  max-width: 46rem;
+  margin: 0 0 1.5rem;
+}
+
+.legal-page section {
+  max-width: 46rem;
+  margin-bottom: 1.75rem;
+}
+
+.legal-page h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.legal-page p,
+.legal-page li {
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.legal-page ul {
+  padding-left: 1.25rem;
+}
+
+.legal-page li {
+  margin-bottom: 0.35rem;
+}
+
+.legal-contact {
+  max-width: 46rem;
+  border-top: 1px solid var(--border-color, #2a2f45);
+  padding-top: 1rem;
+}
+
+@media (max-width: 640px) {
+  .legal-page {
+    padding: 2rem 1rem 3rem;
+  }
+}

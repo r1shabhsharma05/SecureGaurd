@@ -41,6 +41,18 @@ const ROUTE_META: Record<string, RouteMeta> = {
     indexable: true,
     crumbs: [{ label: 'Home', path: '/' }, { label: 'Contact', path: '/contact' }],
   },
+  '/privacy': {
+    title: 'Privacy Policy · SecureGuard',
+    description: 'How SecureGuard collects, uses, and protects your data — and how to delete your account.',
+    indexable: true,
+    crumbs: [{ label: 'Home', path: '/' }, { label: 'Privacy Policy', path: '/privacy' }],
+  },
+  '/terms': {
+    title: 'Terms of Service · SecureGuard',
+    description: 'The terms governing your use of SecureGuard: accounts, acceptable use, plans and billing.',
+    indexable: true,
+    crumbs: [{ label: 'Home', path: '/' }, { label: 'Terms of Service', path: '/terms' }],
+  },
   '/onboarding': {
     title: 'Get started · SecureGuard',
     description: 'Connect a repository, run your first scan and invite your team.',

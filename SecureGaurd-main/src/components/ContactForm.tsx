@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { apiUrl } from '../config/api';
 import { trackEvent } from '../utils/analytics';
 import { useToast } from './Toast';
+import TurnstileWidget, { isTurnstileEnabled } from './TurnstileWidget';
 import './ContactForm.css';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -22,6 +23,10 @@ export default function ContactForm() {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
+  // Day 9 — Turnstile token, required only while the widget is configured.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const captchaEnabled = isTurnstileEnabled();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -42,16 +47,23 @@ export default function ContactForm() {
       setError('Message must be 10–2000 characters.');
       return;
     }
+    if (captchaEnabled && !captchaToken) {
+      setError('Please complete the security check before sending.');
+      return;
+    }
     setSending(true);
     try {
       const res = await fetch(apiUrl('/api/contact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), subject: subject.trim(), message: message.trim(), company }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), subject: subject.trim(), message: message.trim(), company, ...(captchaToken ? { turnstileToken: captchaToken } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.message || 'Your message could not be sent. Please try again later.');
+        // The captcha token is single-use: mint a fresh one for the retry.
+        setCaptchaToken(null);
+        setCaptchaKey((k) => k + 1);
         return;
       }
       setSent(true);
@@ -97,6 +109,12 @@ export default function ContactForm() {
         <span>Company</span>
         <input type="text" value={company} onChange={(e) => setCompany(e.target.value)} tabIndex={-1} autoComplete="off" />
       </label>
+      <TurnstileWidget
+        key={`contact-captcha-${captchaKey}`}
+        onVerify={(token) => setCaptchaToken(token)}
+        onExpire={() => setCaptchaToken(null)}
+        onError={() => setCaptchaToken(null)}
+      />
       <button type="submit" className="contact-submit" disabled={sending}>
         {sending ? 'Sending…' : 'Send message'}
       </button>

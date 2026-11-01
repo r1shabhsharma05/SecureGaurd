@@ -17,7 +17,7 @@ interface AuthContextType {
   accessToken: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (firstName: string, lastName: string, email: string, password: string) => Promise<void>;
+  register: (firstName: string, lastName: string, email: string, password: string, turnstileToken?: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<boolean>;
   completeOnboarding: () => Promise<void>;
@@ -58,12 +58,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(data.accessToken);
   };
 
-  const register = async (firstName: string, lastName: string, email: string, password: string) => {
+  const register = async (firstName: string, lastName: string, email: string, password: string, turnstileToken?: string) => {
     const res  = await fetch(`${API}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ firstName, lastName, email, password }),
+      body: JSON.stringify({ firstName, lastName, email, password, ...(turnstileToken ? { turnstileToken } : {}) }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || 'Registration failed');

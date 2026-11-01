@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react';
+import * as Sentry from '@sentry/react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -22,6 +23,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: unknown, info: unknown): void {
     console.error('Unhandled UI error caught by ErrorBoundary:', error, info);
+    // Day 9: Sentry capture when a DSN is configured; a no-op otherwise.
+    try {
+      Sentry.captureException(error, {
+        extra: { componentStack: (info as { componentStack?: string })?.componentStack },
+      });
+    } catch {
+      // Tracking must never break the fallback UI.
+    }
   }
 
   private handleReload = (): void => {

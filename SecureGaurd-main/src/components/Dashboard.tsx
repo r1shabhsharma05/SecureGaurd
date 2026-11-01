@@ -11,6 +11,7 @@ import {
 import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import { useToast } from './Toast';
+import { deleteAccount } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
 import Breadcrumbs from './Breadcrumbs';
 import EmptyState from './EmptyState';
@@ -22,6 +23,7 @@ import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 const ComplianceReports = lazy(() => import('./ComplianceReports'));
 const SbomPage = lazy(() => import('./SbomPage'));
 const AlertsSettings = lazy(() => import('./AlertsSettings'));
+const ProductInsights = lazy(() => import('./ProductInsights'));
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
 import { apiUrl } from '../config/api';
@@ -123,6 +125,28 @@ export default function Dashboard() {
   const [activeNav, setActiveNav] = useState('overview');
   const [isOrgSettingsOpen, setIsOrgSettingsOpen] = useState(false);
   const [orgSettingsTab, setOrgSettingsTab] = useState<'members' | 'invitations' | 'audit' | 'billing' | 'settings'>('billing');
+  // Day 9 — delete-account confirmation state (Settings → Danger zone).
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    if (!accessToken || deleteConfirmText !== 'DELETE' || !deletePassword) return;
+    setDeletingAccount(true);
+    setDeleteError('');
+    try {
+      await deleteAccount(accessToken, deletePassword, deleteConfirmText);
+      pushToast('success', 'Your account has been deleted.');
+      await logout();
+      navigate('/');
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Account deletion failed.');
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
   
   // DB Connected states
   const [repos, setRepos] = useState<Repository[]>([]);
@@ -1372,8 +1396,12 @@ export default function Dashboard() {
 
         {/* ── Tab: Analytics ── */}
         {activeNav === 'analytics' && (
-          <div className="analytics-container">
-            <h2 className="tab-title">Security Risk Intelligence Report</h2>
+          <>
+            <Suspense fallback={<PageSkeleton />}>
+              <ProductInsights accessToken={accessToken} />
+            </Suspense>
+            <div className="analytics-container">
+              <h2 className="tab-title">Security Risk Intelligence Report</h2>
 
             <div className="analytics-top-grid">
               {/* Donut Chart Card */}
@@ -1448,6 +1476,7 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+          </>
         )}
 
         {/* ── Tab: Settings ── */}
@@ -1553,6 +1582,65 @@ export default function Dashboard() {
               >
                 Copy YAML
               </button>
+            </div>
+
+            {/* Danger zone — delete account (Day 9) */}
+            <div className="settings-card" style={{borderColor: '#7f1d1d'}}>
+              <h3 className="settings-section-title" style={{color: '#f87171'}}>Danger zone — Delete account</h3>
+              <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
+                Permanently delete your account and personal data. Organizations you solely own are handed
+                to another member, or deleted if you are the only member. This cannot be undone.
+              </p>
+              {!showDeleteConfirm ? (
+                <button
+                  type="button"
+                  className="connect-repo-btn"
+                  style={{background: '#7f1d1d'}}
+                  onClick={() => { setShowDeleteConfirm(true); setDeleteError(''); }}
+                >
+                  Delete my account…
+                </button>
+              ) : (
+                <div>
+                  {deleteError && <p style={{fontSize:'0.8rem', color:'#f87171', marginBottom:'0.5rem'}} role="alert">{deleteError}</p>}
+                  <div style={{display:'flex', flexDirection:'column', gap:'0.5rem', maxWidth:'24rem'}}>
+                    <input
+                      type="password"
+                      placeholder="Current password"
+                      value={deletePassword}
+                      onChange={e => setDeletePassword(e.target.value)}
+                      autoComplete="current-password"
+                      style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem'}}
+                    />
+                    <input
+                      type="text"
+                      placeholder='Type DELETE to confirm'
+                      value={deleteConfirmText}
+                      onChange={e => setDeleteConfirmText(e.target.value)}
+                      autoComplete="off"
+                      style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem'}}
+                    />
+                    <div style={{display:'flex', gap:'0.5rem'}}>
+                      <button
+                        type="button"
+                        className="connect-repo-btn"
+                        style={{background: '#7f1d1d'}}
+                        disabled={deletingAccount || deleteConfirmText !== 'DELETE' || !deletePassword}
+                        onClick={() => void handleDeleteAccount()}
+                      >
+                        {deletingAccount ? 'Deleting…' : 'Permanently delete account'}
+                      </button>
+                      <button
+                        type="button"
+                        className="connect-repo-btn"
+                        onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); setDeleteConfirmText(''); setDeleteError(''); }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
           </div>

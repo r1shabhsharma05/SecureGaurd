@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { requestPasswordReset, resetPassword } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
+import TurnstileWidget, { isTurnstileEnabled } from './TurnstileWidget';
 import './AuthPage.css';
 
 interface AuthPageProps {
@@ -26,6 +27,13 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
   const [resetToken,  setResetToken]  = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
+  // Day 9 — Turnstile token, tagged with the form mode that minted it: a
+  // token minted for one mode must not leak into another (single-use, and
+  // the widget remounts on mode change). Derived, not an effect.
+  const [captcha, setCaptcha] = useState<{ mode: string; token: string } | null>(null);
+  const captchaToken = captcha && captcha.mode === mode ? captcha.token : null;
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const captchaEnabled = isTurnstileEnabled();
 
   const location = useLocation();
   const navigate  = useNavigate();
@@ -69,6 +77,11 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
       return;
     }
 
+    if (mode === 'signup' && captchaEnabled && !captchaToken) {
+      setError('Please complete the security check before continuing.');
+      return;
+    }
+
     setLoading(true);
     try {
       if (mode === 'login') {
@@ -77,7 +90,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
         // After login, user state is updated — use a small delay then check
         // Note: we navigate in useEffect below based on updated user state
       } else {
-        await register(firstName, lastName, email, password);
+        await register(firstName, lastName, email, password, captchaToken ?? undefined);
         setSuccess('Account created! Redirecting to setup…');
         trackEvent('signup_completed');
         // New users always go to onboarding
@@ -85,6 +98,9 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
+      // The captcha token is single-use: mint a fresh one for the retry.
+      setCaptcha(null);
+      setCaptchaKey((k) => k + 1);
     } finally {
       setLoading(false);
     }
@@ -95,15 +111,21 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+    if (captchaEnabled && !captchaToken) {
+      setError('Please complete the security check before continuing.');
+      return;
+    }
     setLoading(true);
     try {
-      const data = await requestPasswordReset(email);
+      const data = await requestPasswordReset(email, captchaToken ?? undefined);
       setSuccess('Reset token generated! Check the response or your email.');
       // In dev: auto-fill token from response
       if (data.resetToken) setResetToken(data.resetToken);
       setTimeout(() => setMode('reset'), 1500);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
+      setCaptcha(null);
+      setCaptchaKey((k) => k + 1);
     } finally {
       setLoading(false);
     }
@@ -201,16 +223,25 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
             </div>
 
             {mode === 'signup' && (
-              <div className="checkbox-group" onClick={() => setAgreed(!agreed)}>
-                <div className={`checkbox ${agreed ? 'checked' : ''}`}>
-                  {agreed && <Check size={12} strokeWidth={3} />}
+              <>
+                <TurnstileWidget
+                  key={`captcha-${mode}-${captchaKey}`}
+                  onVerify={(token) => setCaptcha({ mode, token })}
+                  onExpire={() => setCaptcha(null)}
+                  onError={() => setCaptcha(null)}
+                />
+                <div className="checkbox-group" onClick={() => setAgreed(!agreed)}>
+                  <div className={`checkbox ${agreed ? 'checked' : ''}`}>
+                    {agreed && <Check size={12} strokeWidth={3} />}
+                  </div>
+                  <span className="checkbox-label">
+                    I agree to the{' '}
+                    <Link to="/terms" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Terms of Service</Link>
+                    {' & '}
+                    <Link to="/privacy" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Privacy Policy</Link>
+                  </span>
                 </div>
-                <span className="checkbox-label">
-                  {/* Day 8: Privacy Policy / Terms pages are Day 9's scope — no
-                      dead links until those pages exist. */}
-                  I agree to the Terms of Service &amp; Privacy Policy
-                </span>
-              </div>
+              </>
             )}
 
             <button type="submit" className="auth-submit-btn" disabled={loading}>
@@ -230,6 +261,12 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
               <input type="email" id="forgot-email" placeholder="jane@company.com" value={email}
                 onChange={e => setEmail(e.target.value)} required />
             </div>
+            <TurnstileWidget
+              key={`captcha-${mode}-${captchaKey}`}
+              onVerify={(token) => setCaptcha({ mode, token })}
+              onExpire={() => setCaptcha(null)}
+              onError={() => setCaptcha(null)}
+            />
             <button type="submit" className="auth-submit-btn" disabled={loading}>
               {loading
                 ? <span className="btn-loading"><Loader2 size={16} className="spin" /> Sending…</span>

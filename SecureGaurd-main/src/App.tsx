@@ -21,6 +21,27 @@ import PageMeta from './components/PageMeta'
 import Breadcrumbs from './components/Breadcrumbs'
 import ContactForm from './components/ContactForm'
 import NotFound from './components/NotFound'
+import { PrivacyPolicy, TermsOfService } from './components/LegalPages'
+
+function PrivacyPage() {
+  return (
+    <>
+      <Navbar />
+      <PrivacyPolicy />
+      <Footer />
+    </>
+  );
+}
+
+function TermsPage() {
+  return (
+    <>
+      <Navbar />
+      <TermsOfService />
+      <Footer />
+    </>
+  );
+}
 
 function Home() {
   return (
@@ -96,6 +117,8 @@ function App() {
                 <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
                 <Route path="/login" element={<AuthPage defaultMode="login" />} />
                 <Route path="/contact" element={<ContactPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/terms" element={<TermsPage />} />
                 <Route path="/onboarding" element={<OnboardingWizard />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
