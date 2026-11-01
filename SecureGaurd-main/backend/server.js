@@ -15,6 +15,10 @@ const { validateEnv } = require('./config/env');
 // this clear error ever fires.
 validateEnv();
 
+// Day 9 — Sentry error tracking (env-gated, inert without SENTRY_DSN).
+const { initSentry, sentryErrorHandler } = require('./utils/sentry');
+initSentry();
+
 const authRoutes = require('./routes/auth');
 const repoRoutes = require('./routes/repos');
 const scanRoutes = require('./routes/scans');
@@ -70,6 +74,16 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Day 9 — forced Sentry test error. Exists ONLY when SENTRY_TEST_ROUTE is
+// explicitly 'enabled' (never by default in production): hit it once after
+// setting SENTRY_DSN, confirm the error in the Sentry dashboard, then
+// remove the env var. The global error handler below captures it.
+if (process.env.SENTRY_TEST_ROUTE === 'enabled') {
+  app.get('/api/_test-error', (req, res, next) => {
+    next(new Error('SecureGuard Sentry test error — ignore'));
+  });
+}
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/repos', repoRoutes);
@@ -86,6 +100,10 @@ app.use('/api/billing', billingRoutes);
 app.use('/api/sboms', sbomRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api', publicRoutes);
+
+// Day 9 — global error handler (last): captures to Sentry when configured
+// and answers with a generic 500. Stack traces never reach clients.
+app.use(sentryErrorHandler);
 
 // Test PostgreSQL connection
 prisma.$connect()

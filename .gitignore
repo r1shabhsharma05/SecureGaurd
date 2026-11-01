@@ -29,3 +29,7 @@ backend/.env
 *.njsproj
 *.sln
 *.sw?
+
+# Database backups (Day 9) — full production data, never commit
+*.dump.gz
+backups/

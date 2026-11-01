@@ -13,7 +13,10 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const prisma = require('../prismaClient');
+const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
+const { requireTurnstile } = require('../utils/turnstile');
+const { parseSummaryRange, buildAnalyticsSummary } = require('../utils/analyticsSummary');
 const {
   isAllowedAnalyticsEvent,
   sanitizeAnalyticsProps,
@@ -81,7 +84,7 @@ router.post('/analytics/events', analyticsLimiter, async (req, res) => {
   }
 });
 
-router.post('/contact', contactLimiter, async (req, res) => {
+router.post('/contact', contactLimiter, requireTurnstile(), async (req, res) => {
   const checked = validateContactInput(req.body || {});
   // Honeypot filled: answer success without sending or storing anything, so
   // a bot cannot tell it was caught — and no fake "message received" row
@@ -120,6 +123,26 @@ router.post('/contact', contactLimiter, async (req, res) => {
   } catch (err) {
     console.error('Error sending contact message:', err);
     return res.status(502).json({ message: 'Email delivery failed. Please try again later.' });
+  }
+});
+
+// Day 9 — product-activity summary for the dashboard Analytics tab.
+// Authenticated only, aggregate counts only (no per-user rows, no emails,
+// no IPs). Range is 7d/30d/90d; anything else is a 400, not a silent default.
+router.get('/analytics/summary', authMiddleware, async (req, res) => {
+  const days = parseSummaryRange(req.query.range);
+  if (!days) {
+    return res.status(400).json({ message: 'range must be one of: 7d, 30d, 90d.' });
+  }
+  const to = new Date();
+  const from = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
+  from.setUTCDate(from.getUTCDate() - (days - 1));
+  try {
+    const summary = await buildAnalyticsSummary(prisma, { from, to, days });
+    return res.json(summary);
+  } catch (err) {
+    console.error('Error building analytics summary:', err);
+    return res.status(500).json({ message: 'Failed to build analytics summary.' });
   }
 });
 

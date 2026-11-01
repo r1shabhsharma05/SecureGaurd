@@ -6,6 +6,9 @@ const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
+const { requireTurnstile } = require('../utils/turnstile');
+const { planAccountDeletion } = require('../utils/accountDeletion');
+const { createAuditLog } = require('../middleware/rbac');
 
 const rateLimit = require('express-rate-limit');
 
@@ -25,6 +28,16 @@ const resetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 5,
   message: { message: 'Too many password reset attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Day 9 — account deletion is destructive and session-bound: 3 attempts/hour
+// is plenty for a real user and stops session-replay deletion probing.
+const accountDeleteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  message: { message: 'Too many account deletion attempts, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -61,7 +74,8 @@ function clearRefreshCookie(res) {
 }
 
 // ── POST /api/auth/register ───────────────────────────────────────────────────
-router.post('/register', authLimiter, async (req, res) => {
+// Day 9: Turnstile captcha guard (env-gated — see utils/turnstile.js).
+router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
   const { firstName, lastName, email, password } = req.body;
 
   if (!firstName || !lastName || !email || !password)
@@ -284,7 +298,8 @@ router.post('/logout', async (req, res) => {
 });
 
 // ── POST /api/auth/forgot-password ───────────────────────────────────────────
-router.post('/forgot-password', resetLimiter, async (req, res) => {
+// Day 9: Turnstile captcha guard (env-gated — see utils/turnstile.js).
+router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: 'Email is required' });
 
@@ -334,7 +349,9 @@ router.post('/forgot-password', resetLimiter, async (req, res) => {
 });
 
 // ── POST /api/auth/reset-password ────────────────────────────────────────────
-router.post('/reset-password', async (req, res) => {
+// Day 9: rate-limited like forgot-password — the token endpoint had no
+// limiter, so a stolen token could be brute-forced without friction.
+router.post('/reset-password', resetLimiter, async (req, res) => {
   const { token, newPassword } = req.body;
   if (!token || !newPassword) return res.status(400).json({ message: 'Token and new password are required' });
   if (newPassword.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
@@ -430,6 +447,90 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error completing onboarding' });
+  }
+});
+
+// ── DELETE /api/auth/account — Delete my account (Day 9) ─────────────────────
+// Real deletion, not deactivation. Requires the current password (a stolen
+// session token alone must not delete an account) plus the typed
+// confirmation "DELETE". Organization handoff follows the planner in
+// utils/accountDeletion.js: sole-owner orgs with other members transfer
+// to the oldest Admin/member (and the departing user's org-owned repos,
+// scans and reports are reassigned to the successor so the transfer does
+// not gut the org); sole-member orgs are deleted with the account;
+// every other membership is simply removed. Personal data cascades via
+// Prisma (repos, scans, compliance reports, memberships); invitations
+// the user sent keep their rows with a null inviter; audit rows keep
+// theirs with a null actor.
+router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res) => {
+  const { password, confirmation } = req.body || {};
+  if (!password || confirmation !== 'DELETE') {
+    return res.status(400).json({ message: 'Your current password and the typed confirmation DELETE are required.' });
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      include: {
+        memberships: { include: { organization: { include: { memberships: true } } } },
+      },
+    });
+    if (!user) return res.status(404).json({ message: 'Account not found' });
+    if (!(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: 'Password is incorrect' });
+    }
+    const memberships = user.memberships.map((m) => ({
+      organizationId: m.organizationId,
+      role: m.role,
+      members: m.organization.memberships.map((x) => ({ userId: x.userId, role: x.role, createdAt: x.createdAt })),
+    }));
+    const plan = planAccountDeletion(req.userId, memberships);
+    await prisma.$transaction(async (tx) => {
+      for (const t of plan.transfers) {
+        await tx.organizationMembership.update({
+          where: { userId_organizationId: { userId: t.newOwnerId, organizationId: t.organizationId } },
+          data: { role: 'OWNER' },
+        });
+        await tx.repository.updateMany({
+          where: { organizationId: t.organizationId, userId: req.userId },
+          data: { userId: t.newOwnerId },
+        });
+        await tx.scan.updateMany({
+          where: { organizationId: t.organizationId, userId: req.userId },
+          data: { userId: t.newOwnerId },
+        });
+        await tx.complianceReport.updateMany({
+          where: { organizationId: t.organizationId, userId: req.userId },
+          data: { userId: t.newOwnerId },
+        });
+      }
+      for (const orgId of plan.leaves) {
+        await tx.organizationMembership.delete({
+          where: { userId_organizationId: { userId: req.userId, organizationId: orgId } },
+        });
+      }
+      for (const orgId of plan.deletions) {
+        await tx.organization.delete({ where: { id: orgId } });
+      }
+      await tx.user.delete({ where: { id: req.userId } });
+    });
+    // Audit after the data change, so a log row never claims a transfer
+    // that did not happen. Actor becomes null on user delete (SetNull).
+    for (const t of plan.transfers) {
+      await createAuditLog(t.organizationId, req.userId, 'OWNERSHIP_TRANSFERRED', 'ORGANIZATION', String(t.organizationId), { reason: 'account_deletion', newOwnerId: t.newOwnerId });
+    }
+    for (const orgId of plan.leaves) {
+      await createAuditLog(orgId, req.userId, 'MEMBER_REMOVED', 'USER', String(req.userId), { reason: 'account_deletion' });
+    }
+    clearRefreshCookie(res);
+    res.json({
+      message: 'Account deleted.',
+      transferredOrganizations: plan.transfers.map((t) => t.organizationId),
+      deletedOrganizations: plan.deletions,
+      leftOrganizations: plan.leaves,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

@@ -31,6 +31,9 @@ const OPTIONAL_VARS = [
   { name: 'CONTACT_EMAIL', why: 'recipient for contact-form messages (defaults to the EMAIL_FROM address)' },
   { name: 'FP_CLASSIFIER_URL', why: 'Python ML false-positive classifier service URL' },
   { name: 'CLASSIFIER_API_KEY', why: 'auth token for the FP classifier service' },
+  { name: 'TURNSTILE_SECRET_KEY', why: 'Cloudflare Turnstile server-side verification (utils/turnstile.js); captcha is skipped until set' },
+  { name: 'SENTRY_DSN', why: 'Sentry error tracking DSN (utils/sentry.js); tracking is disabled until set' },
+  { name: 'SENTRY_TEST_ROUTE', why: "set to 'enabled' only to verify Sentry with GET /api/_test-error, then remove" },
 ];
 
 function validateEnv(env = process.env) {
