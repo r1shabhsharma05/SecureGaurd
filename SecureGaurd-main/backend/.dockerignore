@@ -1,0 +1,9 @@
+node_modules
+generated
+.env
+# The Python ML services run in their own container and are reached over
+# HTTP (FP_CLASSIFIER_URL); the Node backend never imports them.
+services/fp-classifier
+services/severity-ranker
+__pycache__
+*.pyc
