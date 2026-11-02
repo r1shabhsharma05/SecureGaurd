@@ -34,6 +34,13 @@ const OPTIONAL_VARS = [
   { name: 'TURNSTILE_SECRET_KEY', why: 'Cloudflare Turnstile server-side verification (utils/turnstile.js); captcha is skipped until set' },
   { name: 'SENTRY_DSN', why: 'Sentry error tracking DSN (utils/sentry.js); tracking is disabled until set' },
   { name: 'SENTRY_TEST_ROUTE', why: "set to 'enabled' only to verify Sentry with GET /api/_test-error, then remove" },
+  { name: 'GOOGLE_CLIENT_ID', why: 'SSO "Continue with Google" (utils/oauth.js); button hidden until id + secret are both set' },
+  { name: 'GOOGLE_CLIENT_SECRET', why: 'SSO "Continue with Google" token exchange; never exposed to the frontend' },
+  { name: 'GITHUB_CLIENT_ID', why: 'SSO "Continue with GitHub" (utils/oauth.js); button hidden until id + secret are both set' },
+  { name: 'GITHUB_CLIENT_SECRET', why: 'SSO "Continue with GitHub" token exchange; never exposed to the frontend' },
+  { name: 'GITLAB_CLIENT_ID', why: 'SSO "Continue with GitLab" (utils/oauth.js); button hidden until id + secret are both set' },
+  { name: 'GITLAB_CLIENT_SECRET', why: 'SSO "Continue with GitLab" token exchange; never exposed to the frontend' },
+  { name: 'BACKEND_URL', why: 'public backend origin for OAuth redirect URIs; defaults to the request host when unset' },
 ];
 
 function validateEnv(env = process.env) {

@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { requestPasswordReset, resetPassword } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
+import { apiUrl } from '../config/api';
 import TurnstileWidget, { isTurnstileEnabled } from './TurnstileWidget';
 import './AuthPage.css';
 
@@ -35,9 +36,45 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
   const [captchaKey, setCaptchaKey] = useState(0);
   const captchaEnabled = isTurnstileEnabled();
 
+  // Day 10 — SSO providers configured on the server. The list comes from
+  // the backend, so a button only ever renders for a provider that is
+  // actually configured (no dead buttons). Empty list = no SSO section.
+  // (Fetched by the effect below, after `location` is declared.)
+  const [ssoProviders, setSsoProviders] = useState<{ provider: string; label: string }[]>([]);
+
   const location = useLocation();
   const navigate  = useNavigate();
   const { login, register, user } = useAuth();
+
+  // Day 10 — OAuth error from a failed provider sign-in, derived from the
+  // URL (no effect, no setState): the backend redirects here with
+  // ?oauth_error=<code> when the provider flow fails.
+  const oauthErrorMessages: Record<string, string> = {
+    provider_error: 'Sign-in with your provider failed. Please try again, or use email and password.',
+    failed: 'Sign-in with your provider failed. Please try again, or use email and password.',
+    email_not_verified: 'Your provider account email is not verified. Verify it with your provider, then try again.',
+    account_link_conflict: 'That email is already linked to a different provider account. Sign in with email and password instead.',
+    invalid_state: 'Your sign-in session expired. Please try again.',
+    provider_not_configured: 'That sign-in method is not configured yet.',
+  };
+  const oauthErrorCode = new URLSearchParams(location.search).get('oauth_error');
+  const oauthErrorText = oauthErrorCode
+    ? (oauthErrorMessages[oauthErrorCode] || 'Sign-in with your provider failed. Please try again.')
+    : '';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/auth/oauth/providers'));
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setSsoProviders(Array.isArray(data.providers) ? data.providers : []);
+        }
+      } catch { /* SSO stays hidden when the list cannot load */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     setMode(defaultMode);
@@ -177,6 +214,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
 
         {error   && <div className="auth-alert auth-alert--error">{error}</div>}
         {success && <div className="auth-alert auth-alert--success">{success}</div>}
+        {!error && oauthErrorText && <div className="auth-alert auth-alert--error">{oauthErrorText}</div>}
 
         {/* ── Login / Register ─── */}
         {(mode === 'login' || mode === 'signup') && (
@@ -251,6 +289,20 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
               }
             </button>
           </form>
+        )}
+
+        {/* ── SSO (Day 10): only providers the backend reports configured ── */}
+        {(mode === 'login' || mode === 'signup') && ssoProviders.length > 0 && (
+          <div className="sso-section">
+            <div className="sso-divider"><span>or continue with</span></div>
+            <div className="sso-buttons">
+              {ssoProviders.map((p) => (
+                <a key={p.provider} className="sso-btn" href={apiUrl(`/api/auth/oauth/${p.provider}`)}>
+                  Continue with {p.label}
+                </a>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* ── Forgot Password ─── */}

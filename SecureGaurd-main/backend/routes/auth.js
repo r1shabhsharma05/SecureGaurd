@@ -8,6 +8,19 @@ const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
 const { planAccountDeletion } = require('../utils/accountDeletion');
+const {
+  providerConfig,
+  isProviderConfigured,
+  configuredProviders,
+  callbackUrl,
+  buildAuthorizeUrl,
+  pkcePair,
+  signState,
+  verifyState,
+  exchangeCode,
+  fetchProfile,
+  normalizeProfile,
+} = require('../utils/oauth');
 const { createAuditLog } = require('../middleware/rbac');
 
 const rateLimit = require('express-rate-limit');
@@ -423,6 +436,137 @@ router.get('/me', async (req, res) => {
   } catch {
     clearRefreshCookie(res);
     return res.status(401).json({ message: 'Session expired' });
+  }
+});
+
+// ── SSO / OIDC (Day 10) ───────────────────────────────────────────────────────
+// "Continue with Google / GitHub / GitLab": real authorization-code + PKCE
+// flows (utils/oauth.js). A provider works only when its client id + secret
+// are set; otherwise /providers omits it (no button) and /:provider answers
+// 501 (never a dead redirect). Account linking: a verified provider email
+// matching an existing account links that account; a new email creates an
+// account with an unusable random password hash (password login can never
+// guess it; forgot-password still works). SAML is NOT implemented: see
+// docs/OAUTH_SSO.md — the config surface deliberately 501s rather than
+// pretending a SAML login exists.
+const oauthCallbackLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 30,
+  message: { message: 'Too many sign-in attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function oauthStateCookieOptions() {
+  return { httpOnly: true, secure: true, sameSite: 'none', maxAge: 10 * 60 * 1000, path: '/api/auth' };
+}
+function clearOauthCookies(res) {
+  res.clearCookie('sg_oauth_state', { path: '/api/auth', sameSite: 'none', secure: true });
+  res.clearCookie('sg_oauth_pkce', { path: '/api/auth', sameSite: 'none', secure: true });
+}
+
+// GET /api/auth/oauth/providers — public list of configured providers.
+router.get('/oauth/providers', async (req, res) => {
+  res.json({ providers: configuredProviders() });
+});
+
+// GET /api/auth/oauth/:provider — start the provider flow (302 redirect).
+router.get('/oauth/:provider', async (req, res) => {
+  const cfg = providerConfig(req.params.provider);
+  if (!cfg) return res.status(404).json({ message: 'Unknown sign-in provider' });
+  if (!isProviderConfigured(req.params.provider)) {
+    return res.status(501).json({
+      message: `${cfg.label} sign-in is not configured on the server.`,
+      provider: req.params.provider,
+      configured: false,
+    });
+  }
+  const state = signState(crypto.randomBytes(16).toString('hex'), process.env.JWT_SECRET);
+  const { verifier, challenge } = pkcePair();
+  res.cookie('sg_oauth_state', state, oauthStateCookieOptions());
+  res.cookie('sg_oauth_pkce', verifier, oauthStateCookieOptions());
+  const redirectUri = callbackUrl(req, req.params.provider);
+  res.redirect(buildAuthorizeUrl(req.params.provider, {
+    clientId: process.env[cfg.envId],
+    redirectUri,
+    state,
+    codeChallenge: challenge,
+  }));
+});
+
+// GET /api/auth/oauth/:provider/callback — provider redirects here with a
+// code. On success the refresh cookie is set and the browser lands on the
+// frontend /oauth/callback page, which restores the session via /refresh.
+// On any failure the browser lands on /login with ?oauth_error=<code>;
+// provider error details are logged, never shown (no account enumeration).
+router.get('/oauth/:provider/callback', oauthCallbackLimiter, async (req, res) => {
+  const provider = req.params.provider;
+  const cfg = providerConfig(provider);
+  const fail = (code) => {
+    clearOauthCookies(res);
+    return res.redirect(`${frontendBaseUrl()}/login?oauth_error=${code}`);
+  };
+  if (!cfg || !isProviderConfigured(provider)) return fail('provider_not_configured');
+  if (req.query.error) {
+    console.error(`OAuth ${provider} returned error: ${req.query.error}`);
+    return fail('provider_error');
+  }
+  const { code, state } = req.query;
+  const stateCookie = req.cookies?.sg_oauth_state;
+  if (!code || !state || !stateCookie || state !== stateCookie || !verifyState(state, process.env.JWT_SECRET)) {
+    return fail('invalid_state');
+  }
+  try {
+    const redirectUri = callbackUrl(req, provider);
+    const accessToken = await exchangeCode(provider, {
+      clientId: process.env[cfg.envId],
+      clientSecret: process.env[cfg.envSecret],
+      redirectUri,
+      code,
+      codeVerifier: req.cookies?.sg_oauth_pkce,
+    });
+    const { profile, emails } = await fetchProfile(provider, accessToken);
+    const normalized = normalizeProfile(provider, profile, emails);
+    if (!normalized.email || !normalized.emailVerified) return fail('email_not_verified');
+
+    const idField = cfg.idField;
+    let user = await prisma.user.findFirst({ where: { [idField]: normalized.providerId } });
+    if (!user) {
+      const byEmail = await prisma.user.findUnique({ where: { email: normalized.email } });
+      if (byEmail && byEmail[idField] && byEmail[idField] !== normalized.providerId) {
+        return fail('account_link_conflict');
+      }
+      if (byEmail) {
+        user = await prisma.user.update({
+          where: { id: byEmail.id },
+          data: { [idField]: normalized.providerId, isEmailVerified: true },
+        });
+      } else {
+        // Unusable password: a random secret only the server ever hashed.
+        const unusable = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
+        user = await prisma.user.create({
+          data: {
+            firstName: normalized.firstName,
+            lastName: normalized.lastName,
+            email: normalized.email,
+            password: unusable,
+            isEmailVerified: true,
+            onboardingCompleted: false,
+            [idField]: normalized.providerId,
+          },
+        });
+      }
+    }
+
+    const refreshToken = generateRefreshToken(user.id);
+    const hashedRefresh = await bcrypt.hash(refreshToken, 10);
+    await prisma.user.update({ where: { id: user.id }, data: { refreshToken: hashedRefresh } });
+    setRefreshCookie(res, refreshToken);
+    clearOauthCookies(res);
+    return res.redirect(`${frontendBaseUrl()}/oauth/callback`);
+  } catch (err) {
+    console.error(`OAuth ${provider} callback failed:`, err.message);
+    return fail('failed');
   }
 });
 

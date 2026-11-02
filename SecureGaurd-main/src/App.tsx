@@ -9,6 +9,7 @@ import Pricing from './components/Pricing'
 import CTA from './components/CTA'
 import Footer from './components/Footer'
 import AuthPage from './components/AuthPage'
+import OAuthCallbackPage from './components/OAuthCallbackPage'
 import Dashboard from './components/Dashboard'
 import OnboardingWizard from './components/OnboardingWizard'
 import VulnerabilityDetailsPage from './components/VulnerabilityDetailsPage'
@@ -116,6 +117,7 @@ function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/signup" element={<AuthPage defaultMode="signup" />} />
                 <Route path="/login" element={<AuthPage defaultMode="login" />} />
+              <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
                 <Route path="/contact" element={<ContactPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/terms" element={<TermsPage />} />
