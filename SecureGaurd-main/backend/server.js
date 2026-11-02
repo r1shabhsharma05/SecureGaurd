@@ -34,6 +34,7 @@ const billingWebhookRoutes = require('./routes/billingWebhook');
 const billingRoutes = require('./routes/billing');
 const sbomRoutes = require('./routes/sboms');
 const alertRoutes = require('./routes/alerts');
+const customRulesRoutes = require('./routes/customRules');
 const publicRoutes = require('./routes/public');
 const prisma = require('./prismaClient');
 const { getAllowedOrigins } = require('./config/cors');
@@ -99,6 +100,7 @@ app.use('/api/invitations', invitationRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/sboms', sbomRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/custom-rules', customRulesRoutes);
 app.use('/api', publicRoutes);
 
 // Day 9 — global error handler (last): captures to Sentry when configured

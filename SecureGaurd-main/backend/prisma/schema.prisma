@@ -27,6 +27,11 @@ model User {
   emailVerifyToken     String?
   githubToken          String?
   gitlabToken          String?
+  // Day 10 — SSO/OIDC provider identities (distinct from the PAT columns
+  // above). Set only by a verified OAuth callback; never by password login.
+  oauthGoogleId        String?                  @unique
+  oauthGithubId        String?                  @unique
+  oauthGitlabId        String?                  @unique
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
@@ -52,6 +57,7 @@ model Organization {
   compliance  ComplianceReport[]
   sboms       Sbom[]
   auditLogs   AuditLog[]
+  customRules CustomRule[]
   subscription Subscription?
   alertSetting AlertSetting?
   alertLogs    AlertLog[]
@@ -350,4 +356,35 @@ model ContactMessage {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// Day 10 — org-authored detection rules (PRD §4.2.1). A rule is stored as
+// validated, denormalized columns (never raw YAML) so scans can load it
+// without re-parsing. ruleId is unique per organization (CUSTOM-xxx);
+// the same ruleId in another org is a different rule. Rows are deleted
+// with their organization (Cascade); disabling a rule stops it firing
+// in new scans without deleting its history (past findings keep ruleId).
+model CustomRule {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  ruleId         String // CUSTOM-xxx
+  title          String
+  severity       String // critical | high | medium | low | info
+  type           String   @default("sast") // sast | secret | iac | dependency | api
+  pattern        String // regex source, matched per line
+  ignoreCase     Boolean  @default(false)
+  filePattern    String   @default(".*") // regex matched against the relative file path
+  excludePattern String?
+  description    String   @default("")
+  remediation    String   @default("")
+  cweId          String?
+  enabled        Boolean  @default(true)
+  createdById    Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, ruleId])
+  @@index([organizationId])
 }

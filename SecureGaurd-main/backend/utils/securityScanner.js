@@ -124,9 +124,12 @@ const { scanKubernetesFile } = require('./iacK8sScanner');
 const { scanDockerfile } = require('./iacDockerScanner');
 const { scanAPISpecFile } = require('./apiSpecScanner');
 const { scanCloudFormationFile } = require('./iacCloudFormationScanner');
+const { compileCustomRules, matchCustomRules } = require('./customRules');
 
 // ── Recursive Directory Traversal ─────────────────────────────────────────────
-function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 }, lineCountRef = { count: 0 }) {
+// customRules: normalized org rules (utils/customRules.js shape); compiled
+// once per scan, applied to the same code files as the built-in rules.
+function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 }, lineCountRef = { count: 0 }, compiledCustomRules = []) {
   const list = fs.readdirSync(dir);
   
   for (const item of list) {
@@ -152,7 +155,7 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
 
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) {
-      scanDirectory(fullPath, rootDir, findings, fileCountRef, lineCountRef);
+      scanDirectory(fullPath, rootDir, findings, fileCountRef, lineCountRef, compiledCustomRules);
     } else if (stat.isFile()) {
       fileCountRef.count++;
       
@@ -284,6 +287,13 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
                 });
               }
             }
+
+            // Day 10 — org custom rules (compiled once per scan, passed in
+            // via scanDirectory). No mlFeatures: the FP classifier is
+            // SAST-trained, so custom findings must never be suppressed.
+            if (compiledCustomRules.length > 0) {
+              findings.push(...matchCustomRules(compiledCustomRules, relPath, lineContent, lineNum + 1));
+            }
           }
         } catch (e) {
           // ignore file read error
@@ -296,14 +306,17 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
 const { extractRepositorySbomComponents } = require('./sbomExtractor');
 
 // ── Main Scan Execution Endpoint ──────────────────────────────────────────────
-function runSecurityScan(projectPath) {
+// customRules: normalized org rules (utils/customRules.js shape); compiled
+// once here and applied to the same code files as the built-in rules.
+function runSecurityScan(projectPath, customRules = []) {
   const findings = [];
   const fileCountRef = { count: 0 };
   const lineCountRef = { count: 0 };
-  
+  const compiledCustomRules = compileCustomRules(customRules);
+
   const startTime = Date.now();
   if (fs.existsSync(projectPath)) {
-    scanDirectory(projectPath, projectPath, findings, fileCountRef, lineCountRef);
+    scanDirectory(projectPath, projectPath, findings, fileCountRef, lineCountRef, compiledCustomRules);
   }
   const endTime = Date.now();
 
@@ -331,4 +344,4 @@ function runSecurityScan(projectPath) {
   };
 }
 
-module.exports = { runSecurityScan };
+module.exports = { runSecurityScan, BUILTIN_RULES: RULES };

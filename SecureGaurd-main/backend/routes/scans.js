@@ -9,6 +9,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { checkCanTriggerScan } = require('../services/billingService');
 const { execFileSync } = require('child_process');
 const { runSecurityScan } = require('../utils/securityScanner');
+const { storedRuleToParsed } = require('../utils/customRules');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
@@ -213,8 +214,22 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     }
     const scanPath = scanTarget.scanPath;
 
+    // Day 10 — enabled org custom rules fire in this scan. Loading them
+    // must never fail the scan: a missing table (pre-migration deploy) or
+    // a bad row degrades to built-in rules only, and the scan still runs.
+    let customRules = [];
+    try {
+      const customRows = await prisma.customRule.findMany({
+        where: { organizationId: req.organizationId, enabled: true },
+        orderBy: { ruleId: 'asc' },
+      });
+      customRules = customRows.map(storedRuleToParsed);
+    } catch (customErr) {
+      console.error('Custom rules unavailable, scanning with built-in rules only:', customErr.message);
+    }
+
     // Execute real security scan over the repository's tree
-    const scanResult = runSecurityScan(scanPath);
+    const scanResult = runSecurityScan(scanPath, customRules);
 
     // Per-scan cache for git-based file change frequency lookups
     const freqCache = new Map();
