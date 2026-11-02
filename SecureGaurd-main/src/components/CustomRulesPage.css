@@ -1,0 +1,265 @@
+/* Day 10 — Custom Rules tab. Follows the Dashboard/SBOM visual language. */
+.custom-rules-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.custom-rules-header h2 {
+  margin: 0 0 0.25rem;
+}
+.custom-rules-header p {
+  margin: 0;
+  color: var(--text-dim);
+}
+.custom-rules-readonly {
+  margin-top: 0.5rem !important;
+  color: var(--accent-yellow) !important;
+}
+.custom-rules-alert {
+  margin: 0;
+}
+.custom-rules-library-toggle {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: inherit;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+.custom-rules-library {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+.custom-rules-library-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+.custom-rules-library-row code {
+  min-width: 6.5rem;
+}
+.custom-rules-library-framework {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.custom-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.custom-rules-card {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--bg-card);
+}
+.custom-rules-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.custom-rules-card-id {
+  margin-left: 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.custom-rules-card-desc {
+  color: var(--text-dim);
+  margin: 0.4rem 0;
+}
+.custom-rules-pattern {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.5rem;
+  background: rgba(148, 163, 184, 0.1);
+  font-size: 0.85rem;
+}
+.custom-rules-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+.custom-rules-card-remediation {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0;
+}
+.custom-rules-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.custom-rules-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: none;
+  color: inherit;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+.custom-rules-delete-confirm {
+  border-color: var(--accent-red) !important;
+  color: var(--accent-red) !important;
+}
+.custom-rules-test {
+  margin-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.custom-rules-test label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+.custom-rules-test textarea,
+.custom-rules-test input,
+.custom-rules-test select {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+}
+.custom-rules-test textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+.custom-rules-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.custom-rules-test-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: none;
+  color: inherit;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+.custom-rules-test-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.custom-rules-test-result p {
+  margin: 0.3rem 0;
+}
+.custom-rules-match {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  font-size: 0.9rem;
+}
+.custom-rules-match span {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.custom-rules-match code {
+  overflow-x: auto;
+}
+.custom-rules-test-note {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.custom-rules-create {
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  padding-top: 1rem;
+}
+.custom-rules-create h3 {
+  margin: 0 0 0.25rem;
+}
+.custom-rules-create p {
+  color: var(--text-dim);
+  margin: 0 0 0.6rem;
+}
+.custom-rules-create textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: inherit;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+}
+.custom-rules-create-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.custom-rules-create-actions button {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: none;
+  color: inherit;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.custom-rules-create-btn {
+  background: var(--accent-blue) !important;
+  border-color: var(--accent-blue) !important;
+  color: #fff !important;
+}
+.custom-rules-footnote {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.custom-rules-footnote p {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-start;
+  margin: 0.3rem 0;
+}
+.custom-rules-severity {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  white-space: nowrap;
+}
+.custom-rules-severity--critical { color: var(--accent-red); border-color: var(--accent-red); }
+.custom-rules-severity--high { color: #f97316; border-color: #f97316; }
+.custom-rules-severity--medium { color: var(--accent-yellow); border-color: var(--accent-yellow); }
+.custom-rules-severity--low { color: var(--accent-blue); border-color: var(--accent-blue); }
+.custom-rules-severity--info { color: var(--text-dim); }
+
+@media (max-width: 640px) {
+  .custom-rules-library-row {
+    flex-wrap: wrap;
+  }
+  .custom-rules-library-framework {
+    margin-left: 0;
+  }
+}
