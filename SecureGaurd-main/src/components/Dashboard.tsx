@@ -22,6 +22,7 @@ import { OrganizationSettingsModal } from './OrganizationSettingsModal';
 // keeping the initial Dashboard bundle small (vite flags >500 kB chunks).
 const ComplianceReports = lazy(() => import('./ComplianceReports'));
 const SbomPage = lazy(() => import('./SbomPage'));
+const CustomRulesPage = lazy(() => import('./CustomRulesPage'));
 const AlertsSettings = lazy(() => import('./AlertsSettings'));
 const ProductInsights = lazy(() => import('./ProductInsights'));
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
@@ -116,10 +117,32 @@ function StatusBadge({ s }: { s: string }) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user, accessToken, loading: authLoading, refreshSession, logout } = useAuth();
-  const { activeOrg, activeOrgId, activeRole, orgFetch } = useOrganization();
+  const { activeOrg, activeOrgId, activeRole, orgFetch, loadingOrgs, createOrganization } = useOrganization();
   const { pushToast } = useToast();
   // Day 8: initial data load shows a skeleton instead of zeros/empty lists.
   const [dataLoading, setDataLoading] = useState(true);
+  // Day 10 — first-workspace state: a fresh account has no organization, so
+  // fetchData (gated on activeOrgId) never runs and dataLoading never
+  // clears. The render below therefore shows the skeleton only while orgs
+  // are still loading or an org is selected; with orgs loaded and none
+  // selected it shows the create-workspace state instead (Day-9 finding).
+  const [newOrgName, setNewOrgName] = useState('');
+  const [creatingOrg, setCreatingOrg] = useState(false);
+  const [orgCreateError, setOrgCreateError] = useState('');
+
+  const handleCreateWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOrgName.trim() || creatingOrg) return;
+    setCreatingOrg(true);
+    setOrgCreateError('');
+    try {
+      await createOrganization(newOrgName.trim());
+    } catch (err) {
+      setOrgCreateError(err instanceof Error ? err.message : 'Failed to create workspace');
+    } finally {
+      setCreatingOrg(false);
+    }
+  };
   
   // Navigation
   const [activeNav, setActiveNav] = useState('overview');
@@ -562,6 +585,8 @@ export default function Dashboard() {
     vulndb: 'Vulnerability Database',
     analytics: 'Analytics',
     compliance: 'Compliance Reports',
+    sbom: 'Software SBOM',
+    rules: 'Custom Rules',
     alerts: 'Scan Alerts',
     settings: 'Account Settings',
   };
@@ -706,6 +731,13 @@ export default function Dashboard() {
             <span>Software SBOM</span>
           </button>
           <button
+            className={`dash-nav-item ${activeNav === 'rules' ? 'active' : ''}`}
+            onClick={() => setActiveNav('rules')}
+          >
+            <FileCode2 size={17} />
+            <span>Custom Rules</span>
+          </button>
+          <button
             className="dash-nav-item"
             onClick={() => { setOrgSettingsTab('members'); setIsOrgSettingsOpen(true); }}
           >
@@ -764,6 +796,8 @@ export default function Dashboard() {
               {activeNav === 'vulndb' && 'Vulnerability Database'}
               {activeNav === 'analytics' && 'Analytics'}
               {activeNav === 'compliance' && 'Compliance Reports'}
+              {activeNav === 'sbom' && 'Software SBOM'}
+              {activeNav === 'rules' && 'Custom Rules'}
               {activeNav === 'alerts' && 'Scan Alerts'}
               {activeNav === 'settings' && 'Account Settings'}
             </h1>
@@ -837,8 +871,32 @@ export default function Dashboard() {
 
         {/* Day 8: while the first data load is in flight, show a skeleton
             instead of zeros and empty tables. */}
-        {dataLoading ? (
+        {dataLoading && (authLoading || loadingOrgs || activeOrgId) ? (
           <PageSkeleton />
+        ) : !activeOrgId ? (
+          <div className="no-workspace">
+            <h2>Create your first workspace</h2>
+            <p>
+              Workspaces hold your repositories, scans, and team. Give yours a
+              name to get started — you can invite your team afterwards.
+            </p>
+            <form className="no-workspace-form" onSubmit={handleCreateWorkspace}>
+              <label htmlFor="new-workspace-name">Workspace name</label>
+              <input
+                id="new-workspace-name"
+                type="text"
+                value={newOrgName}
+                onChange={(e) => setNewOrgName(e.target.value)}
+                placeholder="e.g. Acme Security"
+                required
+                minLength={2}
+              />
+              {orgCreateError && <p className="no-workspace-error">{orgCreateError}</p>}
+              <button type="submit" disabled={creatingOrg || !newOrgName.trim()}>
+                {creatingOrg ? 'Creating…' : 'Create workspace'}
+              </button>
+            </form>
+          </div>
         ) : (
           <>
         {/* ── Tab: Overview ── */}
@@ -1661,6 +1719,13 @@ export default function Dashboard() {
         {activeNav === 'sbom' && (
           <Suspense fallback={<PageSkeleton />}>
             <SbomPage selectedRepoId={selectedRepo?.id} />
+          </Suspense>
+        )}
+
+        {/* ── Tab: Custom Rules (Day 10) ── */}
+        {activeNav === 'rules' && (
+          <Suspense fallback={<PageSkeleton />}>
+            <CustomRulesPage />
           </Suspense>
         )}
 
