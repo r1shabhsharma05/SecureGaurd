@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="300" viewBox="0 0 1080 300" role="img" aria-label="SecureGaurd scan flow: connect a repo, scan it, apply custom rules, triage with ML, and fix ranked findings">
+  <defs>
+    <linearGradient id="flowLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="0.5" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+    <linearGradient id="nodeFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF2FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- backdrop -->
+  <rect x="0" y="0" width="1080" height="300" rx="16" fill="#0B1120"/>
+  <text x="540" y="34" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="17" font-weight="700" fill="#E0E7FF">SecureGaurd scan flow</text>
+  <text x="540" y="56" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#94A3B8">repo &#8594; scan &#8594; custom rules &#8594; ML triage &#8594; ranked fix list</text>
+
+  <!-- connector track -->
+  <line x1="80" y1="168" x2="1000" y2="168" stroke="#1E293B" stroke-width="6" stroke-linecap="round"/>
+  <!-- flowing dashes over the track -->
+  <line x1="80" y1="168" x2="1000" y2="168" stroke="url(#flowLine)" stroke-width="6" stroke-linecap="round" stroke-dasharray="14 18">
+    <animate attributeName="stroke-dashoffset" from="128" to="0" dur="1.6s" repeatCount="indefinite"/>
+  </line>
+  <!-- travelling packet -->
+  <circle r="9" fill="#22C55E" stroke="#FFFFFF" stroke-width="2">
+    <animateMotion dur="5s" repeatCount="indefinite" path="M 80,168 H 1000"/>
+  </circle>
+  <circle r="4" fill="#FFFFFF">
+    <animateMotion dur="5s" repeatCount="indefinite" path="M 80,168 H 1000"/>
+  </circle>
+
+  <!-- node 1: connect -->
+  <g>
+    <rect x="30" y="108" width="160" height="120" rx="14" fill="url(#nodeFill)" stroke="#6366F1" stroke-width="2">
+      <animate attributeName="opacity" values="1;0.72;1" dur="2.4s" begin="0s" repeatCount="indefinite"/>
+    </rect>
+    <text x="110" y="140" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="700" fill="#1E1B4B">1 &#183; Connect</text>
+    <text x="110" y="163" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">GitHub / GitLab</text>
+    <text x="110" y="182" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">repo + webhooks</text>
+    <text x="110" y="212" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" fill="#6366F1">&#128451;</text>
+  </g>
+
+  <!-- node 2: scan -->
+  <g>
+    <rect x="250" y="108" width="160" height="120" rx="14" fill="url(#nodeFill)" stroke="#6366F1" stroke-width="2">
+      <animate attributeName="opacity" values="1;0.72;1" dur="2.4s" begin="0.4s" repeatCount="indefinite"/>
+    </rect>
+    <text x="330" y="140" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="700" fill="#1E1B4B">2 &#183; Scan</text>
+    <text x="330" y="163" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">AST &#183; secrets &#183; IaC</text>
+    <text x="330" y="182" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">API-spec &#183; SBOM</text>
+    <text x="330" y="212" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" fill="#6366F1">&#128269;</text>
+  </g>
+
+  <!-- node 3: custom rules -->
+  <g>
+    <rect x="470" y="108" width="160" height="120" rx="14" fill="url(#nodeFill)" stroke="#8B5CF6" stroke-width="2">
+      <animate attributeName="opacity" values="1;0.72;1" dur="2.4s" begin="0.8s" repeatCount="indefinite"/>
+    </rect>
+    <text x="550" y="140" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="700" fill="#1E1B4B">3 &#183; Custom rules</text>
+    <text x="550" y="163" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">your YAML rules fire</text>
+    <text x="550" y="182" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">as CUSTOM findings</text>
+    <text x="550" y="212" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" fill="#8B5CF6">&#9881;</text>
+  </g>
+
+  <!-- node 4: ML triage -->
+  <g>
+    <rect x="690" y="108" width="160" height="120" rx="14" fill="url(#nodeFill)" stroke="#8B5CF6" stroke-width="2">
+      <animate attributeName="opacity" values="1;0.72;1" dur="2.4s" begin="1.2s" repeatCount="indefinite"/>
+    </rect>
+    <text x="770" y="140" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="700" fill="#1E1B4B">4 &#183; ML triage</text>
+    <text x="770" y="163" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">FP classifier &#183; ranker</text>
+    <text x="770" y="182" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">REAL vs noise, 0&#8211;100</text>
+    <text x="770" y="212" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" fill="#8B5CF6">&#129302;</text>
+  </g>
+
+  <!-- node 5: fix -->
+  <g>
+    <rect x="890" y="108" width="160" height="120" rx="14" fill="url(#nodeFill)" stroke="#22C55E" stroke-width="2">
+      <animate attributeName="opacity" values="1;0.72;1" dur="2.4s" begin="1.6s" repeatCount="indefinite"/>
+    </rect>
+    <text x="970" y="140" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="700" fill="#1E1B4B">5 &#183; Fix first</text>
+    <text x="970" y="163" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">ranked findings &#183; AI</text>
+    <text x="970" y="182" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#475569">remediation &#183; confirm</text>
+    <text x="970" y="212" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="20" fill="#22C55E">&#10003;</text>
+  </g>
+
+  <!-- footer -->
+  <text x="540" y="272" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" fill="#94A3B8">Every finding is traceable: rule &#183; file &#183; line &#183; ML features &#183; analyst label</text>
+</svg>
