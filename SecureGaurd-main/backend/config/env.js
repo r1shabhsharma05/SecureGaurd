@@ -12,7 +12,15 @@
 const REQUIRED_VARS = [
   {
     name: 'JWT_SECRET',
-    why: 'signs access tokens (middleware/auth.js, routes/auth.js); also seeds the PAT encryption key',
+    why: 'signs access tokens (middleware/auth.js, routes/auth.js)',
+  },
+  {
+    name: 'JWT_REFRESH_SECRET',
+    why: 'signs refresh tokens (routes/auth.js); independent of JWT_SECRET — no derived fallback',
+  },
+  {
+    name: 'ENCRYPTION_KEY',
+    why: 'AES-256-GCM key for PAT encryption at rest (utils/cryptoUtils.js); must be a 64-hex-char (256-bit) key',
   },
   {
     name: 'DATABASE_URL',
@@ -21,8 +29,6 @@ const REQUIRED_VARS = [
 ];
 
 const OPTIONAL_VARS = [
-  { name: 'JWT_REFRESH_SECRET', why: 'signs refresh tokens (falls back to a JWT_SECRET-derived value)' },
-  { name: 'ENCRYPTION_KEY', why: 'AES-256-GCM key for PAT encryption at rest (utils/cryptoUtils.js)' },
   { name: 'WEBHOOK_SECRET', why: 'fallback secret for webhook signature verification' },
   { name: 'FRONTEND_URL', why: 'production frontend origin for the CORS allow-list' },
   { name: 'GEMINI_API_KEY', why: 'AI fix engine: official Gemini API' },

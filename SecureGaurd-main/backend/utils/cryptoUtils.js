@@ -1,22 +1,18 @@
 const crypto = require('crypto');
 
 const ALGORITHM = 'aes-256-gcm';
-// JWT_SECRET is guaranteed present by config/env.js validateEnv() at startup,
-// so the hardcoded default fallback is gone — secrets come from env only.
-//
-// Day 7 live-bug fix: ENCRYPTION_KEY is a STRING in env, but aes-256-gcm
-// needs exactly 32 key BYTES — passing the raw string to createCipheriv
-// throws "Invalid key length", which made every encrypt() call in
-// production fail (alert settings with a webhook URL, PAT saves: both
-// 500). Normalize: a 64-hex-char value is a hex-encoded 32-byte key;
-// any other string is hashed to 32 bytes (deterministic, so decrypt
-// keeps working for values encrypted under the normalized key). When
-// ENCRYPTION_KEY is unset, the old JWT_SECRET-hash fallback is preserved.
+// PAT / Slack-webhook encryption key: a dedicated, independent 256-bit key.
+// ENCRYPTION_KEY must be a 64-hex-char string (32 bytes, hex-decoded).
+// It is NEVER derived from JWT_SECRET and there is no passphrase
+// fallback: a missing or malformed key is a startup error, not a silent
+// fallback to weaker key material. config/env.js validateEnv() requires
+// the variable; deriveKey() below enforces the format at require time.
 function deriveKey() {
   const raw = process.env.ENCRYPTION_KEY;
-  if (raw && /^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
-  if (raw) return crypto.createHash('sha256').update(raw).digest();
-  return crypto.createHash('sha256').update(process.env.JWT_SECRET).digest();
+  if (!raw || !/^[0-9a-fA-F]{64}$/.test(raw)) {
+    throw new Error('ENCRYPTION_KEY must be a 64-hex-char (256-bit) key');
+  }
+  return Buffer.from(raw, 'hex');
 }
 const SECRET_KEY = deriveKey();
 
@@ -33,20 +29,23 @@ function encrypt(text) {
 function decrypt(encryptedText) {
   if (!encryptedText) return encryptedText;
   const parts = encryptedText.split(':');
-  if (parts.length !== 3) return encryptedText; // Fallback for unencrypted legacy data
-  try {
-    const iv = Buffer.from(parts[0], 'hex');
-    const authTag = Buffer.from(parts[1], 'hex');
-    const encrypted = parts[2];
-    const decipher = crypto.createDecipheriv(ALGORITHM, SECRET_KEY, iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (err) {
-    console.error('Decryption failed:', err.message);
+  // Legacy-plaintext passthrough ONLY for values that are not in the
+  // 3-part iv:tag:ciphertext shape (e.g. PATs stored before encryption
+  // was introduced). Anything in the encrypted shape that fails GCM
+  // authentication throws — a failed decrypt must never be returned as
+  // if it were plaintext.
+  if (parts.length !== 3) {
+    console.warn('[crypto] decrypt: value is not in encrypted (iv:tag:ciphertext) shape; returning as legacy plaintext');
     return encryptedText;
   }
+  const iv = Buffer.from(parts[0], 'hex');
+  const authTag = Buffer.from(parts[1], 'hex');
+  const encrypted = parts[2];
+  const decipher = crypto.createDecipheriv(ALGORITHM, SECRET_KEY, iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
 }
 
 module.exports = { encrypt, decrypt };

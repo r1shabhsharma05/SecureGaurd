@@ -8,6 +8,7 @@ const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
 const { planAccountDeletion } = require('../utils/accountDeletion');
+const { cancelOrgProviderSubscription } = require('./organizations');
 const {
   providerConfig,
   isProviderConfigured,
@@ -21,7 +22,6 @@ const {
   fetchProfile,
   normalizeProfile,
 } = require('../utils/oauth');
-const { createAuditLog } = require('../middleware/rbac');
 
 const rateLimit = require('express-rate-limit');
 
@@ -61,7 +61,14 @@ function generateAccessToken(userId) {
 }
 
 function generateRefreshToken(userId) {
-  return jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh', { expiresIn: REFRESH_EXPIRY });
+  return jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY });
+}
+
+// One-way hash for bearer tokens stored at rest (password-reset and
+// email-verification tokens). The raw token is emailed to the user; only
+// its SHA-256 hash is stored, and lookups hash the presented token.
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 function setRefreshCookie(res, token) {
@@ -103,9 +110,13 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const emailVerifyToken = crypto.randomBytes(32).toString('hex');
+    // Store only the SHA-256 hash of the verification token (a DB read
+    // must not yield a usable token) with a 24 h expiry. Requires the
+    // User.emailVerifyTokenExpiresAt column (schema worker owns it).
+    const emailVerifyExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const newUser = await prisma.user.create({
-      data: { firstName, lastName, email, password: hashedPassword, emailVerifyToken },
+      data: { firstName, lastName, email, password: hashedPassword, emailVerifyToken: hashToken(emailVerifyToken), emailVerifyTokenExpiresAt: emailVerifyExpiry },
     });
 
     const accessToken  = generateAccessToken(newUser.id);
@@ -144,19 +155,26 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
 });
 
 // ── GET|POST /api/auth/verify-email ───────────────────────────────────────────
-// Consumes the token generated at register (User.emailVerifyToken, stored in
-// plaintext like the password-reset token) and marks the email verified.
+// Consumes the token generated at register. Only the SHA-256 hash of the
+// token is stored (User.emailVerifyToken), with a 24 h expiry
+// (User.emailVerifyTokenExpiresAt — schema worker owns the column); the
+// presented token is hashed before lookup and the token is single-use.
 async function verifyEmailHandler(req, res) {
   const token = req.query?.token || req.body?.token;
   if (!token) return res.status(400).json({ message: 'Verification token is required' });
 
   try {
-    const user = await prisma.user.findFirst({ where: { emailVerifyToken: token } });
+    const user = await prisma.user.findFirst({
+      where: {
+        emailVerifyToken: hashToken(token),
+        emailVerifyTokenExpiresAt: { gt: new Date() },
+      },
+    });
     if (!user) return res.status(400).json({ message: 'Invalid or expired verification token' });
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { isEmailVerified: true, emailVerifyToken: null },
+      data: { isEmailVerified: true, emailVerifyToken: null, emailVerifyTokenExpiresAt: null },
     });
 
     res.json({ message: 'Email verified successfully' });
@@ -244,7 +262,7 @@ router.post('/refresh', async (req, res) => {
 
   let decoded;
   try {
-    decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
+    decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
   } catch {
     clearRefreshCookie(res);
     return res.status(401).json({ message: 'Session expired, please login again' });
@@ -301,7 +319,7 @@ router.post('/logout', async (req, res) => {
   const token = req.cookies?.sg_refresh;
   if (token) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
+      const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
       // Invalidate stored refresh token and any in-grace superseded token
       await prisma.user.update({ where: { id: decoded.id }, data: { refreshToken: null, previousRefreshToken: null, refreshGraceExpiresAt: null } });
     } catch { /* already expired */ }
@@ -323,9 +341,11 @@ router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, re
       const resetToken  = crypto.randomBytes(32).toString('hex');
       const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
+      // Store only the SHA-256 hash of the reset token; the raw token is
+      // emailed to the user and is single-use with a 1-hour expiry.
       await prisma.user.update({
         where: { id: user.id },
-        data: { passwordResetToken: resetToken, passwordResetExpiry: resetExpiry },
+        data: { passwordResetToken: hashToken(resetToken), passwordResetExpiry: resetExpiry },
       });
 
       // Honest failure instead of a false "link sent" claim: mail delivery
@@ -372,7 +392,7 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
   try {
     const user = await prisma.user.findFirst({
       where: {
-        passwordResetToken: token,
+        passwordResetToken: hashToken(token),
         passwordResetExpiry: { gt: new Date() }, // not expired
       },
     });
@@ -408,7 +428,7 @@ router.get('/me', async (req, res) => {
   if (!token) return res.status(401).json({ message: 'Not authenticated' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh');
+    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
     const user = await prisma.user.findUnique({ where: { id: decoded.id } });
     if (!user || !user.refreshToken) return res.status(401).json({ message: 'Session expired' });
 
@@ -602,7 +622,10 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
 // to the oldest Admin/member (and the departing user's org-owned repos,
 // scans and reports are reassigned to the successor so the transfer does
 // not gut the org); sole-member orgs are deleted with the account;
-// every other membership is simply removed. Personal data cascades via
+// every other membership is removed only after the departing user's
+// org assets are reassigned to a remaining OWNER/ADMIN (the same handoff
+// as transfers), so leaving never destroys a surviving org's assets.
+// Personal data cascades via
 // Prisma (repos, scans, compliance reports, memberships); invitations
 // the user sent keep their rows with a null inviter; audit rows keep
 // theirs with a null actor.
@@ -628,26 +651,58 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
       members: m.organization.memberships.map((x) => ({ userId: x.userId, role: x.role, createdAt: x.createdAt })),
     }));
     const plan = planAccountDeletion(req.userId, memberships);
+    // Org-scoped assets reassigned on account deletion, per organization,
+    // disclosed in the response (finding 1). CustomRule.createdById is a
+    // plain nullable Int (no User relation), so it is reassigned the same
+    // way instead of dangling at the deleted user id.
+    const reassignedAssets = { repositories: 0, scans: 0, complianceReports: 0, customRules: 0 };
+    const reassignedAssetsByOrganization = {};
+    async function reassignOrgAssets(tx, organizationId, successorId) {
+      const counts = {
+        repositories: (await tx.repository.updateMany({ where: { organizationId, userId: req.userId }, data: { userId: successorId } })).count,
+        scans: (await tx.scan.updateMany({ where: { organizationId, userId: req.userId }, data: { userId: successorId } })).count,
+        complianceReports: (await tx.complianceReport.updateMany({ where: { organizationId, userId: req.userId }, data: { userId: successorId } })).count,
+        customRules: (await tx.customRule.updateMany({ where: { organizationId, createdById: req.userId }, data: { createdById: successorId } })).count,
+      };
+      for (const [key, value] of Object.entries(counts)) reassignedAssets[key] += value;
+      reassignedAssetsByOrganization[organizationId] = counts;
+      return counts;
+    }
+    // Cancel-then-delete for sole-owned orgs slated for deletion: their
+    // Subscription rows cascade-delete with the org, destroying the only
+    // provider ids needed to cancel. Fail closed (502) so a live paid
+    // subscription is never orphaned by account deletion.
+    for (const orgId of plan.deletions) {
+      const sub = await prisma.subscription.findUnique({ where: { organizationId: orgId } });
+      const billingBlock = await cancelOrgProviderSubscription(sub);
+      if (billingBlock) {
+        return res.status(billingBlock.status).json({ message: billingBlock.message });
+      }
+    }
     await prisma.$transaction(async (tx) => {
       for (const t of plan.transfers) {
         await tx.organizationMembership.update({
           where: { userId_organizationId: { userId: t.newOwnerId, organizationId: t.organizationId } },
           data: { role: 'OWNER' },
         });
-        await tx.repository.updateMany({
-          where: { organizationId: t.organizationId, userId: req.userId },
-          data: { userId: t.newOwnerId },
-        });
-        await tx.scan.updateMany({
-          where: { organizationId: t.organizationId, userId: req.userId },
-          data: { userId: t.newOwnerId },
-        });
-        await tx.complianceReport.updateMany({
-          where: { organizationId: t.organizationId, userId: req.userId },
-          data: { userId: t.newOwnerId },
-        });
+        await reassignOrgAssets(tx, t.organizationId, t.newOwnerId);
       }
       for (const orgId of plan.leaves) {
+        // Leaves used to only delete the membership, so the later
+        // tx.user.delete cascade-destroyed every repository, scan and
+        // compliance report the departing user created in a surviving
+        // org. Reassign them first, exactly as on transfers, to a
+        // remaining OWNER, else the oldest ADMIN, else the oldest
+        // remaining member (a leave always has other members by
+        // construction, so a successor exists).
+        const remaining = await tx.organizationMembership.findMany({
+          where: { organizationId: orgId, userId: { not: req.userId } },
+          orderBy: [{ createdAt: 'asc' }, { userId: 'asc' }],
+        });
+        const successor = remaining.find((m) => m.role === 'OWNER')
+          || remaining.find((m) => m.role === 'ADMIN')
+          || remaining[0];
+        if (successor) await reassignOrgAssets(tx, orgId, successor.userId);
         await tx.organizationMembership.delete({
           where: { userId_organizationId: { userId: req.userId, organizationId: orgId } },
         });
@@ -655,22 +710,33 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
       for (const orgId of plan.deletions) {
         await tx.organization.delete({ where: { id: orgId } });
       }
+      // Audit INSIDE the transaction, before the user row is deleted:
+      // createAuditLog uses the global prisma client and cannot run in
+      // this transaction, so the rows are written via tx.auditLog.create
+      // directly while actorId still references a live user. After the
+      // delete commits, the SetNull relation nulls actorId and the rows
+      // survive. (Writing them after the transaction, as before, meant
+      // the insert referenced a deleted user and was silently swallowed.)
+      for (const t of plan.transfers) {
+        await tx.auditLog.create({
+          data: { organizationId: t.organizationId, actorId: req.userId, action: 'OWNERSHIP_TRANSFERRED', targetType: 'ORGANIZATION', targetId: String(t.organizationId), details: { reason: 'account_deletion', newOwnerId: t.newOwnerId } },
+        });
+      }
+      for (const orgId of plan.leaves) {
+        await tx.auditLog.create({
+          data: { organizationId: orgId, actorId: req.userId, action: 'MEMBER_REMOVED', targetType: 'USER', targetId: String(req.userId), details: { reason: 'account_deletion' } },
+        });
+      }
       await tx.user.delete({ where: { id: req.userId } });
     });
-    // Audit after the data change, so a log row never claims a transfer
-    // that did not happen. Actor becomes null on user delete (SetNull).
-    for (const t of plan.transfers) {
-      await createAuditLog(t.organizationId, req.userId, 'OWNERSHIP_TRANSFERRED', 'ORGANIZATION', String(t.organizationId), { reason: 'account_deletion', newOwnerId: t.newOwnerId });
-    }
-    for (const orgId of plan.leaves) {
-      await createAuditLog(orgId, req.userId, 'MEMBER_REMOVED', 'USER', String(req.userId), { reason: 'account_deletion' });
-    }
     clearRefreshCookie(res);
     res.json({
       message: 'Account deleted.',
       transferredOrganizations: plan.transfers.map((t) => t.organizationId),
       deletedOrganizations: plan.deletions,
       leftOrganizations: plan.leaves,
+      reassignedAssets,
+      reassignedAssetsByOrganization,
     });
   } catch (err) {
     console.error(err);
