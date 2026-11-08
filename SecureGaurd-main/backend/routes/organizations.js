@@ -4,8 +4,48 @@ const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
-const { checkCanInviteMember } = require('../services/billingService');
+const { getOrgUsage } = require('../services/billingService');
+const { cancelSubscription } = require('../utils/razorpay');
 const { sendMail } = require('../utils/mailer');
+
+// Per-user cap on organization creation: every org mints a fresh FREE
+// quota (3 repos, 10 scans/month, 3 members), so unbounded creation
+// means unbounded free usage. Tunable product decision — override with
+// the MAX_ORGS_PER_USER environment variable. Default 5.
+const MAX_ORGS_PER_USER = Number.parseInt(process.env.MAX_ORGS_PER_USER || '', 10) || 5;
+
+/**
+ * Cancels the provider subscription(s) of an org slated for deletion.
+ * Returns null when there is nothing live to cancel, or { status, message }
+ * when the delete must be blocked. Fail closed: a provider rejection, or a
+ * live Stripe subscription (no Stripe cancel helper exists and the Stripe
+ * SDK is not installed), aborts the delete so billing cannot continue
+ * for an org whose Subscription row — the only record of the provider
+ * ids — is about to cascade-delete with it.
+ * Razorpay is cancelled immediately (cancel_at_cycle_end=0): the org is
+ * being deleted, so there is no period end left to honour.
+ * Exported for the account-deletion org-deletion path in routes/auth.js,
+ * which deletes orgs directly and must call this before its delete loop.
+ */
+async function cancelOrgProviderSubscription(sub) {
+  if (!sub) return null;
+  const live = ['active', 'trialing', 'past_due'].includes(sub.status);
+  if (sub.stripeSubscriptionId && live) {
+    return {
+      status: 502,
+      message: 'This organization has an active Stripe subscription that cannot be cancelled automatically. Cancel it in Stripe (or contact support) before deleting the organization.'
+    };
+  }
+  if (sub.razorpaySubscriptionId && live) {
+    try {
+      await cancelSubscription(sub.razorpaySubscriptionId, false);
+    } catch (providerErr) {
+      console.error('[Organizations] Razorpay cancel failed:', providerErr.message);
+      return { status: 502, message: 'Billing provider error. Subscription was not canceled — organization was not deleted.' };
+    }
+  }
+  return null;
+}
 
 // All organization endpoints require logged-in user
 router.use(authMiddleware);
@@ -61,8 +101,16 @@ router.post('/', async (req, res) => {
 
   const cleanName = name.trim();
   let slug = slugify(cleanName);
-  
+
   if (!slug) slug = `org-${Date.now()}`;
+
+  // Per-user org cap. Counted before the transaction and answered with
+  // 403 directly: throwing inside prisma.$transaction is swallowed by
+  // the catch-all below and would surface as 500.
+  const ownedOrgCount = await prisma.organizationMembership.count({ where: { userId: req.userId } });
+  if (ownedOrgCount >= MAX_ORGS_PER_USER) {
+    return res.status(403).json({ message: `You have reached the limit of ${MAX_ORGS_PER_USER} organizations per user.` });
+  }
 
   // Ensure unique slug
   let suffix = 0;
@@ -158,7 +206,18 @@ router.patch('/:organizationId', requireOrgContext, requireOrgRole(['OWNER', 'AD
 // ── DELETE /api/organizations/:id — Delete organization (OWNER ONLY) ────────
 router.delete('/:organizationId', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
   try {
-    // Audit before delete
+    // Cancel-then-delete, fail closed: a live provider subscription
+    // must not outlive the org — the Subscription row cascade-deletes
+    // with it, destroying the only ids needed to cancel.
+    const sub = await prisma.subscription.findUnique({ where: { organizationId: req.organizationId } });
+    const billingBlock = await cancelOrgProviderSubscription(sub);
+    if (billingBlock) {
+      return res.status(billingBlock.status).json({ message: billingBlock.message });
+    }
+
+    // Audit before delete. NOTE: AuditLog.organizationId is a required
+    // field with onDelete Cascade, so this row is deleted with the org
+    // and cannot be retained without a schema change (schema owner).
     await createAuditLog(req.organizationId, req.userId, 'ORGANIZATION_DELETED', 'ORGANIZATION', String(req.organizationId), { name: req.organization.name });
 
     await prisma.organization.delete({
@@ -240,9 +299,25 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
       }
     }
 
-    const updated = await prisma.organizationMembership.update({
-      where: { id: targetMembership.id },
-      data: { role }
+    const updated = await prisma.$transaction(async (tx) => {
+      // The owner count above is a fast path only: re-check it inside a
+      // transaction holding a per-org advisory lock, so two concurrent
+      // demotes cannot both observe 2 owners and leave the org ownerless.
+      if (targetMembership.role === 'OWNER' && role !== 'OWNER') {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        const ownerCount = await tx.organizationMembership.count({
+          where: { organizationId: req.organizationId, role: 'OWNER' }
+        });
+        if (ownerCount <= 1) {
+          const err = new Error('Cannot demote the final Owner. Assign another Owner first.');
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+      return tx.organizationMembership.update({
+        where: { id: targetMembership.id },
+        data: { role }
+      });
     });
 
     await createAuditLog(
@@ -261,6 +336,7 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
       updatedAt: updated.updatedAt
     });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ message: err.message });
     console.error('Error updating member role:', err);
     res.status(500).json({ message: 'Server error updating member role' });
   }
@@ -297,8 +373,23 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
       }
     }
 
-    await prisma.organizationMembership.delete({
-      where: { id: targetMembership.id }
+    await prisma.$transaction(async (tx) => {
+      // Same locked re-check as the demote path: the count above is a
+      // fast path only — two concurrent removes must not both pass.
+      if (targetMembership.role === 'OWNER') {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        const ownerCount = await tx.organizationMembership.count({
+          where: { organizationId: req.organizationId, role: 'OWNER' }
+        });
+        if (ownerCount <= 1) {
+          const err = new Error('Cannot remove the final Owner of the organization');
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+      await tx.organizationMembership.delete({
+        where: { id: targetMembership.id }
+      });
     });
 
     await createAuditLog(
@@ -312,6 +403,7 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
 
     res.json({ message: 'Member removed from organization' });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ message: err.message });
     console.error('Error removing member:', err);
     res.status(500).json({ message: 'Server error removing member' });
   }
@@ -330,8 +422,24 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
       }
     }
 
-    await prisma.organizationMembership.delete({
-      where: { id: req.orgMembership.id }
+    await prisma.$transaction(async (tx) => {
+      // Same locked re-check as the demote/remove paths: the count
+      // above is a fast path only — two concurrent leaves must not
+      // both pass and leave the org ownerless.
+      if (req.orgRole === 'OWNER') {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        const ownerCount = await tx.organizationMembership.count({
+          where: { organizationId: req.organizationId, role: 'OWNER' }
+        });
+        if (ownerCount <= 1) {
+          const err = new Error('Cannot leave as the sole owner — transfer ownership first');
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+      await tx.organizationMembership.delete({
+        where: { id: req.orgMembership.id }
+      });
     });
 
     await createAuditLog(
@@ -345,6 +453,7 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
 
     res.json({ message: 'Left organization successfully' });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ message: err.message });
     console.error('Error leaving organization:', err);
     res.status(500).json({ message: 'Server error leaving organization' });
   }
@@ -429,21 +538,34 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
   const cleanEmail = email.trim().toLowerCase();
 
   try {
-    // Entitlement Check: Member Limit
-    const limitCheck = await checkCanInviteMember(req.organizationId);
-    if (!limitCheck.allowed) {
+    // Entitlement check: member limit counts current members PLUS
+    // outstanding PENDING invitations. Counting members alone lets an
+    // owner issue any number of invites while under the limit and grow
+    // the org past it at accept time (the accept path re-checks, but
+    // invites that can never be accepted should not be issued).
+    // Expired-but-unmarked invitations are excluded: they can never
+    // be accepted, the accept path flips them to EXPIRED.
+    const usage = await getOrgUsage(req.organizationId);
+    const pendingInvites = await prisma.organizationInvitation.count({
+      where: {
+        organizationId: req.organizationId,
+        status: 'PENDING',
+        expiresAt: { gt: new Date() }
+      }
+    });
+    if (usage.usage.members.used + pendingInvites >= usage.usage.members.limit) {
       await createAuditLog(
         req.organizationId,
         req.userId,
         'USAGE_LIMIT_REACHED',
         'ORGANIZATION',
         String(req.organizationId),
-        { resource: 'MEMBER', limit: limitCheck.usage?.limit }
+        { resource: 'MEMBER', limit: usage.usage.members.limit }
       );
       return res.status(403).json({
-        error: limitCheck.reason,
-        message: limitCheck.message,
-        usage: limitCheck.usage
+        error: 'MEMBER_LIMIT_REACHED',
+        message: `Your organization has reached the limit of ${usage.usage.members.limit} team members on the ${usage.planName} plan. Upgrade to Pro for up to 15 members.`,
+        usage: usage.usage.members
       });
     }
 
@@ -517,13 +639,14 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
       mailMessageId = null;
     }
 
+    // The raw token is never returned in the API response: the email
+    // above is the only delivery channel. Returning it here gave anyone
+    // able to call invite creation a second copy of the credential.
     res.status(201).json({
       id: invitation.id,
       invitedEmail: invitation.invitedEmail,
       role: invitation.role,
       expiresAt: invitation.expiresAt,
-      token: rawToken,
-      invitationUrl,
       mailSent,
       mailMessageId
     });
@@ -611,3 +734,4 @@ router.get('/:organizationId/audit-logs', requireOrgContext, requireOrgRole(['OW
 });
 
 module.exports = router;
+module.exports.cancelOrgProviderSubscription = cancelOrgProviderSubscription;
