@@ -129,7 +129,47 @@ const { compileCustomRules, matchCustomRules } = require('./customRules');
 // ── Recursive Directory Traversal ─────────────────────────────────────────────
 // customRules: normalized org rules (utils/customRules.js shape); compiled
 // once per scan, applied to the same code files as the built-in rules.
-function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 }, lineCountRef = { count: 0 }, compiledCustomRules = []) {
+//
+// Symlink containment: entries are lstat'ed, never stat'ed — a symlink
+// (file or directory) is skipped outright, so a link inside the clone can
+// never pull in files from outside the scan root. Directories are also
+// resolved with realpathSync and required to stay inside the realpath of
+// the scan root, visited directory inodes are tracked (a directory is
+// never traversed twice), and traversal depth is capped.
+const MAX_TRAVERSAL_DEPTH = 32;
+
+// Secret rules must never persist the secret value itself: the finding
+// snippet is the evidence, not a copy of the credential. Mirror the
+// TF-005 pattern (generic snippet, no value): keep the key name and at
+// most the first two characters of the value, then '****'. Applies to
+// SEC-001 (AWS key), SEC-002 (private key block) and SEC-003 (hardcoded
+// secret); SAST/IaC lines are code, not credentials, and are untouched.
+const SECRET_RULE_IDS = new Set(['SEC-001', 'SEC-002', 'SEC-003']);
+
+function redactSecretSnippet(ruleId, lineContent) {
+  const line = lineContent.trim();
+  if (ruleId === 'SEC-001') {
+    const m = line.match(/AKIA[0-9A-Z]{16}/);
+    return m ? `Exposed AWS Access Key: ${m[0].slice(0, 2)}****` : 'Exposed AWS Access Key (value redacted)';
+  }
+  if (ruleId === 'SEC-002') {
+    return 'Exposed Private Key block (contents redacted)';
+  }
+  // SEC-003: `name = "value"` — keep the key name + first two value chars.
+  const m = line.match(/(secret|password|passwd|token|jwt_secret)\s*=\s*['"`]([^'"`]{2})/i);
+  if (m) return `${m[1]} = "${m[2]}****"`;
+  return 'Hardcoded secret (value redacted)';
+}
+
+function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 }, lineCountRef = { count: 0 }, compiledCustomRules = [], depth = 0, visited = new Set(), rootReal = null) {
+  if (depth > MAX_TRAVERSAL_DEPTH) return;
+  if (rootReal === null) {
+    try {
+      rootReal = fs.realpathSync(rootDir);
+    } catch {
+      rootReal = rootDir;
+    }
+  }
   const list = fs.readdirSync(dir);
   
   for (const item of list) {
@@ -153,9 +193,29 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
       continue;
     }
 
-    const stat = fs.statSync(fullPath);
+    // lstat, not stat: a symlink must never be followed — it is skipped,
+    // so scan input can only come from inside the clone tree.
+    let stat;
+    try {
+      stat = fs.lstatSync(fullPath);
+    } catch {
+      continue;
+    }
+    if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
-      scanDirectory(fullPath, rootDir, findings, fileCountRef, lineCountRef, compiledCustomRules);
+      // Containment + loop guard: resolve the real path, require it inside
+      // the real scan root, and traverse each directory inode only once.
+      let realPath;
+      try {
+        realPath = fs.realpathSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (realPath !== rootReal && !realPath.startsWith(rootReal + path.sep)) continue;
+      const inodeKey = `${stat.dev}:${stat.ino}`;
+      if (visited.has(inodeKey)) continue;
+      visited.add(inodeKey);
+      scanDirectory(fullPath, rootDir, findings, fileCountRef, lineCountRef, compiledCustomRules, depth + 1, visited, rootReal);
     } else if (stat.isFile()) {
       fileCountRef.count++;
       
@@ -254,7 +314,9 @@ function scanDirectory(dir, rootDir, findings = [], fileCountRef = { count: 0 },
                   continue;
                 }
 
-                const findingSnippet = lineContent.trim();
+                const findingSnippet = SECRET_RULE_IDS.has(rule.id)
+                  ? redactSecretSnippet(rule.id, lineContent)
+                  : lineContent.trim();
                 let mlFeatures = null;
                 
                 // CWE mapping per rule

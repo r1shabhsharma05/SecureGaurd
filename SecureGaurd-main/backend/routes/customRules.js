@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
+const rateLimit = require('express-rate-limit');
+const { Worker } = require('worker_threads');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
-const { parseCustomRuleYaml, publicCustomRule, storedRuleToParsed, compileCustomRules, matchCustomRules } = require('../utils/customRules');
+const { parseCustomRuleYaml, publicCustomRule, storedRuleToParsed } = require('../utils/customRules');
 const { runSecurityScan, BUILTIN_RULES } = require('../utils/securityScanner');
 const { IAC_RULES } = require('../utils/rules/iacRules');
 const { API_RULES } = require('../utils/rules/apiRules');
@@ -15,6 +17,58 @@ router.use(requireOrgContext);
 
 const MAX_RULES_PER_ORG = 50;
 const WRITE_ROLES = ['OWNER', 'ADMIN', 'DEVELOPER'];
+
+// Same budget as the scan trigger limiter (routes/scans.js): the test
+// endpoint executes author-supplied regexes, so it is rate-limited like a
+// scan trigger and restricted to WRITE_ROLES — a read-only AUDITOR must
+// not be able to trigger a rule authored by someone else.
+const customRuleTestLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 10,
+  message: { message: 'Too many rule test requests. Please wait before testing another rule.' },
+});
+
+const RULE_TEST_TIMEOUT_MS = 5000;
+
+/**
+ * Run one stored rule's matching in a worker thread so a pathological
+ * pattern (e.g. one stored before the write-time nested-quantifier guard)
+ * can stall only the worker, never this process's event loop. The worker
+ * is terminated on timeout; the caller gets a 503, not a hung process.
+ */
+function testRuleInWorker(rule, relPath, lines) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
+    const worker = new Worker(
+      `
+      const { parentPort, workerData } = require('worker_threads');
+      const { compileCustomRules, matchCustomRules } = require(${JSON.stringify(require.resolve('../utils/customRules'))});
+      const compiled = compileCustomRules([workerData.rule]);
+      const matches = [];
+      // A rule skipped at compile time (e.g. a pathological pattern
+      // stored before the write-time guard) compiles to nothing: the
+      // test honestly reports zero matches instead of crashing.
+      if (compiled.length > 0) {
+        workerData.lines.forEach((line, idx) => {
+          matches.push(...matchCustomRules(compiled, workerData.relPath, line, idx + 1));
+        });
+      }
+      parentPort.postMessage(matches);
+      `,
+      { eval: true, workerData: { rule, relPath, lines } },
+    );
+    const timer = setTimeout(() => {
+      worker.terminate().catch(() => {});
+      settle(reject, new Error('Rule test timed out: the pattern took too long to evaluate'));
+    }, RULE_TEST_TIMEOUT_MS);
+    worker.on('message', (matches) => { worker.terminate().catch(() => {}); settle(resolve, matches); });
+    worker.on('error', (err) => settle(reject, err));
+    worker.on('exit', (code) => {
+      if (code !== 0) settle(reject, new Error(`Rule test worker exited with code ${code}`));
+    });
+  });
+}
 
 // GET /api/custom-rules/library — built-in rule library (read-only reference
 // for authors writing custom rules). Any org member may read it.
@@ -197,10 +251,12 @@ router.delete('/:id', requireOrgRole(WRITE_ROLES), async (req, res) => {
   }
 });
 
-// POST /api/custom-rules/:id/test — test against pasted sample code (any
-// member). Pure regex matching over the supplied lines; nothing is scanned
-// or stored. Body: { code: string, filePath?: string }.
-router.post('/:id/test', async (req, res) => {
+// POST /api/custom-rules/:id/test — test against pasted sample code.
+// OWNER/ADMIN/DEVELOPER only, rate-limited like a scan trigger. Matching
+// runs in a worker thread with a timeout (see testRuleInWorker), so a
+// pathological stored pattern cannot block the main event loop. Body:
+// { code: string, filePath?: string }.
+router.post('/:id/test', customRuleTestLimiter, requireOrgRole(WRITE_ROLES), async (req, res) => {
   try {
     const row = await loadRule(req, res);
     if (!row) return;
@@ -209,11 +265,15 @@ router.post('/:id/test', async (req, res) => {
       return res.status(400).json({ message: 'code must be a non-empty string under 200 KB' });
     }
     const relPath = typeof filePath === 'string' && filePath ? path.basename(filePath) : 'sample.js';
-    const [compiled] = compileCustomRules([storedRuleToParsed(row)]);
-    const matches = [];
-    code.split('\n').forEach((line, idx) => {
-      matches.push(...matchCustomRules([compiled], relPath, line, idx + 1));
-    });
+    let matches;
+    try {
+      matches = await testRuleInWorker(storedRuleToParsed(row), relPath, code.split('\n'));
+    } catch (workerErr) {
+      if (/timed out/.test(workerErr.message)) {
+        return res.status(503).json({ message: workerErr.message });
+      }
+      throw workerErr;
+    }
     res.json({ ruleId: row.ruleId, filePath: relPath, matchCount: matches.length, matches });
   } catch (err) {
     console.error('Error testing custom rule:', err);

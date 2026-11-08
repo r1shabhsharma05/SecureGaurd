@@ -14,6 +14,20 @@
  * of their own organization (a trusted author, not an anonymous input), and
  * patterns are length-capped. A pathological pattern can slow that org's
  * own scans; it cannot affect other orgs' data.
+ *
+ * That shortcut is WRONG and is fixed here: the backend runs as a single
+ * Node process, so one catastrophic pattern stalls every tenant's scans.
+ * Defense in depth, in order:
+ *  1. Write time (parseCustomRuleYaml → compilePattern): a structural
+ *     nested-quantifier check rejects patterns such as (a+)+, (a*)* and
+ *     (a|ab)+ before they can be stored.
+ *  2. Test endpoint (routes/customRules.js): matching runs in a worker
+ *     thread with a timeout, so a pre-existing stored pattern can never
+ *     block the main event loop.
+ *  3. Real scans rely on (1): only patterns that passed the write-time
+ *     check can be stored, and compileCustomRules re-checks stored rules
+ *     and skips any that fail, so one bad stored rule can never fail or
+ *     stall a scan.
  */
 const yaml = require('js-yaml');
 
@@ -49,7 +63,142 @@ function asText(value, field, { min = 1, max = 2000, required = true } = {}) {
   return text;
 }
 
+/**
+ * Structural nested-quantifier check (write-time ReDoS guard). Rejects a
+ * quantified group whose content ends in a quantified atom — (a+)+, (a*)*,
+ * ((a+))+, ([\w]+)+ — or whose top-level alternatives overlap so one
+ * branch is a literal prefix of another — (a|ab)+, (ab|a)+. Either shape
+ * can backtrack exponentially on a non-matching input (e.g. (a+)+$ against
+ * 'a'*30 + '!'). This is structural, not a timing check: it runs before
+ * the pattern is stored, so it cannot be evaded by input size, and it
+ * never executes the pattern. Legitimate patterns are unaffected: a
+ * quantified group with unquantified, non-overlapping branches — e.g.
+ * (foo|bar)+ or \.(js|ts|jsx|tsx)$ — passes, as do quantified atoms that
+ * are not groups ((\d+\.)+ is allowed: only a trailing quantified atom
+ * inside a quantified group is rejected).
+ */
+function quantifierLengthAt(s, i) {
+  const c = s[i];
+  if (c === '+' || c === '*' || c === '?') {
+    return i + 1 < s.length && s[i + 1] === '?' ? 2 : 1;
+  }
+  if (c === '{') {
+    const m = /^\{\d+(,\d*)?\}/.exec(s.slice(i));
+    if (m) {
+      const end = i + m[0].length;
+      return end < s.length && s[end] === '?' ? m[0].length + 1 : m[0].length;
+    }
+  }
+  return 0;
+}
+
+function literalPrefix(branchText) {
+  let out = '';
+  for (let i = 0; i < branchText.length; i++) {
+    const c = branchText[i];
+    if (c === '\\' && i + 1 < branchText.length) { out += branchText[i + 1]; i++; continue; }
+    if (/[A-Za-z0-9]/.test(c)) { out += c; continue; }
+    break;
+  }
+  return out;
+}
+
+function assertSafePattern(source, field) {
+  const failMsg = `${field} uses a nested quantifier that can backtrack catastrophically `
+    + '(e.g. (a+)+, (a*)* or (a|ab)+) — rewrite the pattern without a quantified group '
+    + 'containing a quantified atom or overlapping alternatives';
+  // closeInfo: index of ')' -> { branches: [{ text, endsQuantified }], quantified }
+  const closeInfo = new Map();
+  // Each open group: { branches: [], curText: '', curEndsQuantified: false }
+  const stack = [{ branches: [], curText: '', curEndsQuantified: false }];
+  let inClass = false;
+  // prev atom kind: 'none' | 'open' | 'alt' | 'char' | 'class' | 'group' | 'quantifier'
+  let prevKind = 'none';
+  let prevCloseIndex = -1;
+
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    const frame = stack[stack.length - 1];
+    if (c === '\\' && i + 1 < source.length) {
+      frame.curText += source.slice(i, i + 2);
+      i++;
+      frame.curEndsQuantified = false;
+      prevKind = 'char';
+      continue;
+    }
+    if (inClass) {
+      frame.curText += c;
+      if (c === ']') { inClass = false; prevKind = 'class'; frame.curEndsQuantified = false; }
+      continue;
+    }
+    if (c === '[') {
+      inClass = true;
+      frame.curText += c;
+      prevKind = 'class';
+      frame.curEndsQuantified = false;
+      continue;
+    }
+    if (c === '(') {
+      frame.curText += c;
+      stack.push({ branches: [], curText: '', curEndsQuantified: false });
+      prevKind = 'open';
+      continue;
+    }
+    if (c === ')') {
+      const closed = stack.pop();
+      if (!closed) fail(`${field} is not a valid regular expression: unmatched )`);
+      closed.branches.push({ text: closed.curText, endsQuantified: closed.curEndsQuantified });
+      const endsQuantified = closed.branches.some((b) => b.endsQuantified);
+      closeInfo.set(i, { branches: closed.branches, quantified: false, endsQuantified });
+      const parent = stack[stack.length - 1];
+      if (!parent) fail(`${field} is not a valid regular expression: unmatched )`);
+      parent.curText += c;
+      parent.curEndsQuantified = endsQuantified;
+      prevKind = 'group';
+      prevCloseIndex = i;
+      continue;
+    }
+    if (c === '|' && stack.length > 1) {
+      frame.branches.push({ text: frame.curText, endsQuantified: frame.curEndsQuantified });
+      frame.curText = '';
+      frame.curEndsQuantified = false;
+      prevKind = 'alt';
+      continue;
+    }
+    const qLen = (prevKind === 'char' || prevKind === 'class' || prevKind === 'group' || prevKind === 'quantifier')
+      ? quantifierLengthAt(source, i)
+      : 0;
+    if (qLen > 0) {
+      if (prevKind === 'group') {
+        const info = closeInfo.get(prevCloseIndex);
+        if (info) {
+          if (info.branches.some((b) => b.endsQuantified)) fail(failMsg);
+          const prefixes = info.branches.map((b) => literalPrefix(b.text)).filter(Boolean);
+          for (let a = 0; a < prefixes.length; a++) {
+            for (let b = 0; b < prefixes.length; b++) {
+              if (a !== b && prefixes[b].startsWith(prefixes[a]) && prefixes[b].length > prefixes[a].length) {
+                fail(failMsg);
+              }
+            }
+          }
+          info.quantified = true;
+        }
+      }
+      frame.curText += source.slice(i, i + qLen);
+      frame.curEndsQuantified = true;
+      prevKind = 'quantifier';
+      i += qLen - 1;
+      continue;
+    }
+    frame.curText += c;
+    frame.curEndsQuantified = false;
+    prevKind = 'char';
+  }
+  if (stack.length !== 1) fail(`${field} is not a valid regular expression: unmatched (`);
+}
+
 function compilePattern(source, field) {
+  assertSafePattern(source, field);
   try {
     return new RegExp(source);
   } catch (err) {
@@ -137,6 +286,11 @@ function compileCustomRules(rules) {
   const compiled = [];
   for (const rule of rules || []) {
     try {
+      // Re-check stored rules: a rule stored before the write-time guard
+      // (or inserted by any other path) must never stall a scan.
+      assertSafePattern(rule.pattern, 'pattern');
+      if (rule.filePattern) assertSafePattern(rule.filePattern, 'filePattern');
+      if (rule.excludePattern) assertSafePattern(rule.excludePattern, 'excludePattern');
       compiled.push({
         ...rule,
         regex: new RegExp(rule.pattern, rule.ignoreCase ? 'i' : ''),
@@ -154,6 +308,7 @@ function compileCustomRules(rules) {
 function matchCustomRules(compiledRules, relPath, lineContent, lineNum) {
   const findings = [];
   for (const rule of compiledRules || []) {
+    if (!rule || !rule.fileRegex || !rule.regex) continue;
     if (!rule.fileRegex.test(relPath)) continue;
     if (!rule.regex.test(lineContent)) continue;
     if (rule.excludeRegex && rule.excludeRegex.test(lineContent)) continue;
@@ -218,6 +373,7 @@ module.exports = {
   parseCustomRuleYaml,
   compileCustomRules,
   matchCustomRules,
+  assertSafePattern,
   publicCustomRule,
   storedRuleToParsed,
   SEVERITIES,
