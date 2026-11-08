@@ -61,11 +61,14 @@ function idsFrom(subEntity) {
 /**
  * Updates the resolved row, or creates the org's subscription row when the
  * org is known but has no row yet (mirrors getOrgSubscription's auto-create).
+ * When eventTime is given, the row is also stamped with it as
+ * lastWebhookEventAt so later (older) deliveries can be ignored.
  * Returns the saved row or null when nothing could be resolved.
  */
-async function saveSubscription(tx, record, organizationId, data) {
+async function saveSubscription(tx, record, organizationId, data, eventTime) {
+  const stamped = eventTime ? { ...data, lastWebhookEventAt: eventTime } : data;
   if (record) {
-    return tx.subscription.update({ where: { id: record.id }, data });
+    return tx.subscription.update({ where: { id: record.id }, data: stamped });
   }
   if (organizationId) {
     return tx.subscription.upsert({
@@ -75,9 +78,9 @@ async function saveSubscription(tx, record, organizationId, data) {
         plan: 'FREE',
         status: 'active',
         cancelAtPeriodEnd: false,
-        ...data
+        ...stamped
       },
-      update: data
+      update: stamped
     });
   }
   return null;
@@ -117,6 +120,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const subEntity = payload.payload?.subscription?.entity || null;
   const payEntity = payload.payload?.payment?.entity || null;
 
+  // Event time for the ordering guard: the TOP-LEVEL payload.created_at
+  // (Unix seconds, when Razorpay emitted this event). NEVER
+  // subEntity.created_at — that is the subscription's creation time,
+  // identical for every event on the same subscription, so it cannot
+  // order events.
+  const eventTime = typeof payload.created_at === 'number'
+    ? new Date(payload.created_at * 1000)
+    : null;
+
   // 2. Idempotency: Razorpay sends a unique event id per delivery.
   const eventId =
     req.headers['x-razorpay-event-id'] ||
@@ -142,6 +154,23 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
       });
 
+      // Ordering guard, inside the same transaction: ignore an event
+      // older than (or equal to) the last applied event for this
+      // subscription — Razorpay delivery order is not guaranteed, so
+      // without this a retried/delayed cancel could resurrect a
+      // subscription a newer event already changed. The event row above
+      // is still kept, so the dedupe holds and the stale event is acked.
+      if (eventTime) {
+        const lookupEntity = eventType === 'payment.failed'
+          ? { id: payEntity?.subscription_id || subEntity?.id }
+          : subEntity;
+        const { record: existing } = await resolveOrg(tx, lookupEntity);
+        if (existing && existing.lastWebhookEventAt && eventTime <= existing.lastWebhookEventAt) {
+          console.log(`[Razorpay Webhook] Stale event ${eventId} (${eventType}) ignored: event time ${eventTime.toISOString()} <= last applied ${existing.lastWebhookEventAt.toISOString()}.`);
+          return;
+        }
+      }
+
       const audit = (organizationId, action, details) =>
         tx.auditLog.create({
           data: {
@@ -159,7 +188,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           // must NOT move yet — the org keeps its current plan until
           // subscription.activated.
           const { record, organizationId } = await resolveOrg(tx, subEntity);
-          await saveSubscription(tx, record, organizationId, idsFrom(subEntity));
+          await saveSubscription(tx, record, organizationId, idsFrom(subEntity), eventTime);
           break;
         }
 
@@ -174,7 +203,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             status: 'active'
           };
           if (planKey) data.plan = planKey;
-          const saved = await saveSubscription(tx, record, organizationId, data);
+          const saved = await saveSubscription(tx, record, organizationId, data, eventTime);
           if (saved) {
             await audit(
               saved.organizationId,
@@ -192,7 +221,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           const data = { ...idsFrom(subEntity), ...periodFrom(subEntity) };
           if (planKey) data.plan = planKey;
           if (mappedStatus) data.status = mappedStatus;
-          const saved = await saveSubscription(tx, record, organizationId, data);
+          const saved = await saveSubscription(tx, record, organizationId, data, eventTime);
           if (saved) {
             await audit(saved.organizationId, 'SUBSCRIPTION_UPDATED', {
               plan: saved.plan,
@@ -208,7 +237,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           const saved = await saveSubscription(tx, record, organizationId, {
             ...idsFrom(subEntity),
             status: 'past_due'
-          });
+          }, eventTime);
           if (saved) {
             await audit(saved.organizationId, 'SUBSCRIPTION_UPDATED', { status: 'past_due' });
           }
@@ -223,7 +252,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan: 'FREE',
             status: 'canceled',
             cancelAtPeriodEnd: false
-          });
+          }, eventTime);
           if (saved) {
             await audit(saved.organizationId, 'SUBSCRIPTION_CANCELED', {
               previousPlan: record?.plan
@@ -242,7 +271,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         case 'subscription.resumed': {
           // Local model has no paused state; plan/status stay untouched.
           const { record, organizationId } = await resolveOrg(tx, subEntity);
-          const saved = await saveSubscription(tx, record, organizationId, idsFrom(subEntity));
+          const saved = await saveSubscription(tx, record, organizationId, idsFrom(subEntity), eventTime);
           if (saved) {
             await audit(saved.organizationId, 'SUBSCRIPTION_UPDATED', { event: eventType });
           }
@@ -255,7 +284,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           if (record) {
             await tx.subscription.update({
               where: { id: record.id },
-              data: { status: 'past_due' }
+              data: { status: 'past_due', ...(eventTime ? { lastWebhookEventAt: eventTime } : {}) }
             });
             await audit(record.organizationId, 'PAYMENT_FAILED', {
               paymentId: payEntity?.id,

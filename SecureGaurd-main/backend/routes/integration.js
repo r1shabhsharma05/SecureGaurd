@@ -8,6 +8,7 @@ const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
 const crypto = require('crypto');
 const { encrypt, decrypt } = require('../utils/cryptoUtils');
+const { checkCanTriggerScan } = require('../services/billingService');
 const rateLimit = require('express-rate-limit');
 
 const webhookLimiter = rateLimit({
@@ -28,10 +29,14 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function verifyWebhookSignature(platform, req) {
-  const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) return false;
+// Per-repository webhook secret, generated at repo creation in
+// routes/repos.js (see generateWebhookSecret below — that file is the one
+// place that mints it). 64 hex chars = 256 bits of entropy.
+function generateWebhookSecret() {
+  return crypto.randomBytes(32).toString('hex');
+}
 
+function verifyWithSecret(platform, req, secret) {
   if (platform === 'github') {
     const signature = req.headers['x-hub-signature-256'];
     if (!signature || !Buffer.isBuffer(req.rawBody)) return false;
@@ -45,16 +50,22 @@ function verifyWebhookSignature(platform, req) {
   return false;
 }
 
+// Verify a webhook signature against the repo-specific secret FIRST,
+// falling back to the shared WEBHOOK_SECRET during transition (repos
+// created before per-repo secrets exist have webhookSecret NULL). The
+// shared secret should be rotated once every repo has its own secret.
+// Fails CLOSED: with neither secret configured nothing is trusted.
+function verifyWebhookSignature(platform, req, repo) {
+  if (repo && repo.webhookSecret && verifyWithSecret(platform, req, repo.webhookSecret)) return true;
+  const sharedSecret = process.env.WEBHOOK_SECRET;
+  if (sharedSecret) return verifyWithSecret(platform, req, sharedSecret);
+  return false;
+}
+
 // Webhook endpoint does NOT require auth header since it's called by Github/Gitlab
 router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
   const { platform } = req.params;
   const payload = req.body;
-  
-  if (!verifyWebhookSignature(platform, req)) {
-    return res.status(401).json({ message: 'Invalid webhook signature or secret token' });
-  }
-
-  console.log(`[Webhook Received] Platform: ${platform}`);
 
   let scanTarget = null;
   try {
@@ -76,13 +87,66 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       return res.status(400).json({ message: 'Could not extract repository full name from payload' });
     }
 
-    // Find the repository in database
+    // Find the repository in database. Looked up BEFORE signature
+    // verification so the per-repo secret can be tried first; a bad
+    // signature still returns 401 whether or not the repo exists, so
+    // this reveals nothing about registration.
     const repo = await prisma.repository.findFirst({
       where: { fullName: repoFullName, platform },
     });
 
+    if (!verifyWebhookSignature(platform, req, repo)) {
+      return res.status(401).json({ message: 'Invalid webhook signature or secret token' });
+    }
+
     if (!repo) {
       return res.status(404).json({ message: `Repository ${repoFullName} is not registered in SecureGuard` });
+    }
+
+    console.log(`[Webhook Received] Platform: ${platform}`);
+
+    // Quota: webhook-triggered scans count against the org's monthly
+    // scan limit exactly like manual scans — checked BEFORE any scan
+    // work and BEFORE the delivery is recorded, so a quota-rejected
+    // delivery is not marked processed and a later retry still scans.
+    if (repo.organizationId) {
+      const limitCheck = await checkCanTriggerScan(repo.organizationId);
+      if (!limitCheck.allowed) {
+        await createAuditLog(
+          repo.organizationId,
+          repo.userId,
+          'USAGE_LIMIT_REACHED',
+          'ORGANIZATION',
+          String(repo.organizationId),
+          { resource: 'SCAN', limit: limitCheck.usage?.limit }
+        );
+        return res.status(403).json({
+          error: limitCheck.reason,
+          message: limitCheck.message,
+          usage: limitCheck.usage
+        });
+      }
+    }
+
+    // Idempotency: record this delivery ATOMICALLY before scanning.
+    // GitHub sends X-GitHub-Delivery; GitLab sends no delivery id, so
+    // platforms without one fall back to (repositoryId, commitSha) —
+    // a re-push of the same commit is the same scan. The unique
+    // constraint makes the check-then-insert atomic: a redelivery hits
+    // P2002 and returns 200 with no scan, no Scan row and no alerts.
+    // (Moving the scan to an async queue is a larger follow-up; this
+    // dedupe is the bounded fix for redelivery.)
+    const deliveryId = req.headers['x-github-delivery']
+      || `fallback:${platform}:${repo.id}:${commitSha || 'push-event'}`;
+    try {
+      await prisma.webhookDelivery.create({
+        data: { deliveryId, platform, repositoryId: repo.id, commitSha: commitSha || null },
+      });
+    } catch (dedupeErr) {
+      if (dedupeErr.code === 'P2002') {
+        return res.status(200).json({ message: 'Webhook already processed', duplicate: true });
+      }
+      throw dedupeErr;
     }
 
     // Scan the pushed repository's own tree (clone of the registered repo),
@@ -365,12 +429,21 @@ router.get('/repos', async (req, res) => {
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
   const { repositoryId, commitSha, prNumber } = req.body;
-  if (!repositoryId || !commitSha || !prNumber) {
+  if (!repositoryId || !commitSha || prNumber === undefined || prNumber === null || prNumber === '') {
     return res.status(400).json({ message: 'repositoryId, commitSha and prNumber are required' });
+  }
+  // The check run attests to ONE commit: a malformed SHA must never be
+  // bound to a scan verdict, and prNumber must be a real PR number.
+  if (typeof commitSha !== 'string' || !/^[0-9a-f]{40}$/i.test(commitSha)) {
+    return res.status(400).json({ message: 'commitSha must be a 40-character hex SHA' });
+  }
+  const prNum = Number(prNumber);
+  if (!Number.isInteger(prNum) || prNum <= 0) {
+    return res.status(400).json({ message: 'prNumber must be a positive integer' });
   }
 
   try {
-    const { parseRepoFullName, buildCheckRunPayload, buildPrCommentBody } = require('../utils/prBot');
+    const { parseRepoFullName, githubRepoPath, buildCheckRunPayload, buildPrCommentBody } = require('../utils/prBot');
     const repo = await prisma.repository.findFirst({
       where: { id: parseInt(repositoryId), organizationId: req.organizationId },
     });
@@ -387,8 +460,11 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
       return res.status(400).json({ message: 'No GitHub token connected — connect a PAT in onboarding or settings first' });
     }
 
+    // The verdict must come from a scan of THIS commit only. A request
+    // for a commit with no scan falls through to the existing neutral
+    // no-scan branch below — never to an unrelated latest scan's verdict.
     const scan = await prisma.scan.findFirst({
-      where: { repositoryId: repo.id, organizationId: req.organizationId },
+      where: { repositoryId: repo.id, organizationId: req.organizationId, commitSha },
       orderBy: { createdAt: 'desc' },
     });
     const criticalCount = scan ? scan.criticalCount : 0;
@@ -410,7 +486,7 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
       checkPayload.output.summary = 'No SecureGuard scan exists for this repository yet — run a scan first for a real verdict.';
       checkPayload.conclusion = 'neutral';
     }
-    const checkRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/check-runs`, {
+    const checkRes = await fetch(`https://api.github.com${githubRepoPath(parsed.owner, parsed.repo)}/check-runs`, {
       method: 'POST', headers: ghHeaders, body: JSON.stringify(checkPayload),
     });
     if (!checkRes.ok) {
@@ -423,7 +499,7 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
       repoFullName: repo.fullName, commitSha, isClean,
       criticalCount, highCount, mediumCount, lowCount, reportUrl,
     });
-    const commentRes = await fetch(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${prNumber}/comments`, {
+    const commentRes = await fetch(`https://api.github.com${githubRepoPath(parsed.owner, parsed.repo)}/issues/${prNum}/comments`, {
       method: 'POST', headers: ghHeaders, body: JSON.stringify({ body: scan ? commentBody : `${commentBody}\n\n_Note: no SecureGuard scan exists for this repository yet — run a scan first for a real verdict._` }),
     });
     if (!commentRes.ok) {
@@ -440,7 +516,7 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
 
     await createAuditLog(
       req.organizationId, req.userId, 'PR_BOT_POSTED', 'REPOSITORY', String(repo.id),
-      { prNumber, commitSha, checkRunId: checkRun.id, commentId: comment.id, conclusion: checkRun.conclusion }
+      { prNumber: prNum, commitSha, checkRunId: checkRun.id, commentId: comment.id, conclusion: checkRun.conclusion }
     );
 
     res.json({
@@ -448,7 +524,7 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
       botReport: {
         repository: repo.fullName,
         commit: commitSha,
-        prNumber,
+        prNumber: prNum,
         scanId: scan ? scan.id : null,
         checkRun: { id: checkRun.id, html_url: checkRun.html_url, conclusion: checkRun.conclusion },
         comment: { id: comment.id, html_url: comment.html_url },
@@ -461,3 +537,4 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
 });
 
 module.exports = router;
+module.exports.generateWebhookSecret = generateWebhookSecret;

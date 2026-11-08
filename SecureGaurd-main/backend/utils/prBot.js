@@ -15,6 +15,21 @@ function parseRepoFullName(fullName) {
   return { owner: parts[0], repo: parts[1] };
 }
 
+// GitHub API path for a repo, with both path segments URL-encoded so a
+// crafted owner/repo name (e.g. containing '/' or '..') cannot escape the
+// intended /repos/:owner/:repo/... path. Callers must use this instead of
+// interpolating parsed.owner/parsed.repo directly into a fetch URL.
+function githubRepoPath(owner, repo) {
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
+
+// Strip Markdown-control characters from a value interpolated into a
+// code span in the PR comment: backticks would break out of the span and
+// newlines/CRs would let a crafted value inject arbitrary Markdown.
+function sanitizeMarkdownInline(value) {
+  return String(value ?? '').replace(/[`\r\n]/g, '');
+}
+
 function buildCheckRunPayload({ commitSha, isClean, criticalCount, highCount, reportUrl }) {
   return {
     name: 'SecureGuard',
@@ -35,8 +50,8 @@ function buildCheckRunPayload({ commitSha, isClean, criticalCount, highCount, re
 
 function buildPrCommentBody({ repoFullName, commitSha, isClean, criticalCount, highCount, mediumCount, lowCount, reportUrl }) {
   const lines = [
-    `## SecureGuard report for \`${repoFullName}\``,
-    `Commit: \`${commitSha}\``,
+    `## SecureGuard report for \`${sanitizeMarkdownInline(repoFullName)}\``,
+    `Commit: \`${sanitizeMarkdownInline(commitSha)}\``,
     '',
     isClean
       ? '✅ No critical or high findings in the latest scan.'
@@ -46,4 +61,4 @@ function buildPrCommentBody({ repoFullName, commitSha, isClean, criticalCount, h
   return lines.join('\n');
 }
 
-module.exports = { parseRepoFullName, buildCheckRunPayload, buildPrCommentBody };
+module.exports = { parseRepoFullName, githubRepoPath, sanitizeMarkdownInline, buildCheckRunPayload, buildPrCommentBody };

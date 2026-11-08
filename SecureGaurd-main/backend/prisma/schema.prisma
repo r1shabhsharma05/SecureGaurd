@@ -25,6 +25,7 @@ model User {
   isEmailVerified      Boolean                  @default(false)
   onboardingCompleted  Boolean                  @default(false)
   emailVerifyToken     String?
+  emailVerifyTokenExpiresAt DateTime? // expiry of the email-verification token; set/read by routes/auth.js
   githubToken          String?
   gitlabToken          String?
   // Day 10 — SSO/OIDC provider identities (distinct from the PAT columns
@@ -76,6 +77,12 @@ model Subscription {
   status               String       @default("active") // active | trialing | past_due | canceled | incomplete | incomplete_expired | unpaid
   currentPeriodStart   DateTime?
   currentPeriodEnd     DateTime?
+  // Event time (top-level Razorpay payload.created_at) of the last applied
+  // webhook event. Events older than this are ignored in the same
+  // transaction — Razorpay delivery order is not guaranteed. Never key this
+  // on subEntity.created_at: that is the subscription creation time,
+  // identical for every event on the same subscription.
+  lastWebhookEventAt   DateTime?
   cancelAtPeriodEnd    Boolean      @default(false)
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
@@ -101,6 +108,24 @@ model RazorpayWebhookEvent {
   razorpayEventId String   @unique
   eventType       String
   processedAt     DateTime @default(now())
+}
+
+// Push-webhook delivery idempotency (GitHub/GitLab): one row per accepted
+// delivery. deliveryId is the platform's delivery id (X-GitHub-Delivery),
+// or a platform:repositoryId:commitSha fallback for platforms without one
+// (GitLab sends none). The @unique constraint makes the check-then-insert
+// in routes/integration.js atomic — a redelivery hits P2002 and is a
+// no-op, so a scan is never run twice and alerts are never re-dispatched.
+// Plain fields, no FK: same pattern as RazorpayWebhookEvent above.
+model WebhookDelivery {
+  id           Int      @id @default(autoincrement())
+  deliveryId   String   @unique
+  platform     String
+  repositoryId Int
+  commitSha    String?
+  receivedAt   DateTime @default(now())
+
+  @@index([repositoryId, commitSha])
 }
 
 model OrganizationMembership {
@@ -165,6 +190,13 @@ model Repository {
   platform       String    @default("github") // github | gitlab | bitbucket | manual
   language       String?
   isActive       Boolean   @default(true)
+  // Per-repository webhook secret (crypto random hex, generated at repo
+  // creation in routes/repos.js). Webhooks are verified against this FIRST,
+  // falling back to the shared WEBHOOK_SECRET during transition; NULL for
+  // repos created before per-repo secrets exist. Rotate the shared secret
+  // once every repo has its own. Returned once in the repo-create
+  // response; never returned by the repo list/detail endpoints.
+  webhookSecret  String?
   riskLevel      String    @default("none") // none | low | medium | high | critical
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
