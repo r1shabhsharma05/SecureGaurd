@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { checkCanAddRepository } = require('../services/billingService');
 const { getPlanConfig } = require('../config/plans');
+const { generateWebhookSecret } = require('./integration');
 
 // Remote git URLs only: https://, http://, git://, or ssh git@host:path.
 // Anything else (notably a server-local filesystem path) is rejected here
@@ -33,7 +34,9 @@ router.get('/', async (req, res) => {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    res.json(repos);
+    // Never leak the per-repo webhook secret in the list response: it is
+    // returned once, at creation, and is a credential after that.
+    res.json(repos.map(({ webhookSecret, ...repo }) => repo));
   } catch (err) {
     console.error('Error fetching repos:', err);
     res.status(500).json({ message: 'Server error' });
@@ -105,6 +108,10 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, re
           url: trimmedUrl,
           platform: platform || 'manual',
           language: language || null,
+          // Per-repo webhook secret (returned once in the 201 response;
+          // never in list/detail responses). Existing repos keep NULL and
+          // verify against the shared WEBHOOK_SECRET until backfilled.
+          webhookSecret: generateWebhookSecret(),
         },
       });
     });
