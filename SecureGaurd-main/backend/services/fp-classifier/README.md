@@ -48,7 +48,8 @@ uvicorn service:app --host 0.0.0.0 --port 8001 --workers 4
 | Variable | Location | Description |
 |---|---|---|
 | `FP_CLASSIFIER_URL` | `backend/.env` | URL the Node.js backend uses to reach this service (default: `http://localhost:8001`) |
-| `CLASSIFIER_API_KEY` | `backend/.env` | Shared secret key for Node→Python auth. Sent as `X-SecureGuard-Key` header. **Change before production.** |
+| `CLASSIFIER_API_KEY` | `backend/.env` | Shared secret key for Node→Python auth. Sent as `X-SecureGuard-Key` header. **Change before production.** When unset, the service fails closed (401) unless `CLASSIFIER_ALLOW_UNAUTHENTICATED=1` is set. |
+| `CLASSIFIER_ALLOW_UNAUTHENTICATED` | env only | Set to `1` **for local dev/tests only** to allow unauthenticated access when no key is configured. Never set in production. |
 
 ---
 
@@ -142,7 +143,7 @@ Returns usage statistics derived from `predictions.log`. Requires `X-SecureGuard
 The classifier service must **never** be exposed to the public internet. It is intended to be called exclusively by the Node.js backend on the same host/network.
 
 **Protections in place:**
-1. **API Key header (`X-SecureGuard-Key`)** — All prediction endpoints reject requests without this header matching `CLASSIFIER_API_KEY` in `.env`.
+1. **API Key header (`X-SecureGuard-Key`)** — All prediction endpoints reject requests without this header matching `CLASSIFIER_API_KEY` in `.env` — **when the key is configured**. When `CLASSIFIER_API_KEY` is unset the service fails closed with 401, unless the explicit local-dev/test opt-in `CLASSIFIER_ALLOW_UNAUTHENTICATED=1` is set (never in production).
 2. **Bind to localhost only** for dev: `uvicorn service:app --host 127.0.0.1 --port 8001`
 3. **Firewall rule (recommended for production):** Allow port `8001` only from the Node.js server's internal IP.
 

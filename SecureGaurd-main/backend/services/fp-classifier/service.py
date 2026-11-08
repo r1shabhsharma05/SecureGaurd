@@ -73,6 +73,10 @@ def get_ranker_version() -> str:
 
 # ─── Load API Key from env or .env file ───────────────────────────────────────
 CLASSIFIER_API_KEY = os.environ.get("CLASSIFIER_API_KEY")
+# Fail-closed by default: when no key is configured, every authenticated
+# endpoint returns 401. The ONLY exception is the explicit local-dev/test
+# opt-in CLASSIFIER_ALLOW_UNAUTHENTICATED=1 — never set it in production.
+CLASSIFIER_ALLOW_UNAUTHENTICATED = os.environ.get("CLASSIFIER_ALLOW_UNAUTHENTICATED") == "1"
 if not CLASSIFIER_API_KEY:
     env_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", ".env"))
     if os.path.exists(env_path):
@@ -91,7 +95,13 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
     print("[SECUREGUARD] FP Classifier Service -- STARTING UP")
     print(f"   Model path : {os.path.join(BASE_DIR, 'model.joblib')}")
-    print(f"   API Key    : {'SET (OK)' if CLASSIFIER_API_KEY else 'NOT SET - open access'}")
+    if CLASSIFIER_API_KEY:
+        _key_status = "SET (OK)"
+    elif CLASSIFIER_ALLOW_UNAUTHENTICATED:
+        _key_status = "NOT SET - unauthenticated local-dev opt-in (CLASSIFIER_ALLOW_UNAUTHENTICATED=1)"
+    else:
+        _key_status = "NOT SET - fail-closed (set CLASSIFIER_ALLOW_UNAUTHENTICATED=1 for local dev only)"
+    print(f"   API Key    : {_key_status}")
     # Check model metadata
     if os.path.exists(METADATA_JSON):
         with open(METADATA_JSON, "r", encoding="utf-8") as f:
@@ -125,10 +135,20 @@ app.add_middleware(
 
 # ─── Auth Helper ───────────────────────────────────────────────────────────────
 def check_auth(request: Request):
-    if CLASSIFIER_API_KEY:
-        key = request.headers.get("x-secureguard-key")
-        if not key or key != CLASSIFIER_API_KEY:
-            raise HTTPException(status_code=401, detail="Unauthorized — missing or invalid X-SecureGuard-Key header")
+    # Fail closed: no key configured means no access, unless the operator
+    # explicitly opted in to unauthenticated local-dev/test access.
+    if not CLASSIFIER_API_KEY:
+        if CLASSIFIER_ALLOW_UNAUTHENTICATED:
+            return
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized — CLASSIFIER_API_KEY is not configured; "
+                   "set it, or opt in to unauthenticated local-dev access "
+                   "with CLASSIFIER_ALLOW_UNAUTHENTICATED=1",
+        )
+    key = request.headers.get("x-secureguard-key")
+    if not key or key != CLASSIFIER_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized — missing or invalid X-SecureGuard-Key header")
 
 # ─── Logging Helper ────────────────────────────────────────────────────────────
 def log_prediction(finding_dict: dict, result_dict: dict):
@@ -374,9 +394,17 @@ def rank_batch(batch_req: BatchRequest, request: Request):
             results.append(_rank_fallback(finding_dict))
     return {"results": results, "total": len(results)}
 
+# /metrics reads only the tail of the log: the file grows one line per
+# prediction, so an unbounded read is an unbounded memory/CPU cost per
+# request. FOLLOW-UP: predictions.log itself still has no rotation — add
+# log rotation (e.g. RotatingFileHandler or logrotate) so the file does
+# not grow without bound on disk.
+MAX_METRICS_LOG_LINES = 1000
+
+
 @app.get("/metrics")
 def get_metrics(request: Request):
-    """Usage stats from prediction log"""
+    """Usage stats from prediction log (last 1000 entries at most)"""
     check_auth(request)
     total = 0
     real_count = 0
@@ -386,32 +414,33 @@ def get_metrics(request: Request):
 
     if os.path.exists(LOG_PATH):
         with open(LOG_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        entry = json.loads(line)
-                        total += 1
-                        pred = entry.get("prediction")
-                        conf = float(entry.get("confidence", 0.0))
-                        rule = entry.get("rule_id", "unknown")
+            lines = f.readlines()[-MAX_METRICS_LOG_LINES:]
+        for line in lines:
+            line = line.strip()
+            if line:
+                try:
+                    entry = json.loads(line)
+                    total += 1
+                    pred = entry.get("prediction")
+                    conf = float(entry.get("confidence", 0.0))
+                    rule = entry.get("rule_id", "unknown")
 
-                        if pred == "REAL":
-                            real_count += 1
-                        elif pred == "FALSE_POSITIVE":
-                            fp_count += 1
+                    if pred == "REAL":
+                        real_count += 1
+                    elif pred == "FALSE_POSITIVE":
+                        fp_count += 1
 
-                        total_conf += conf
+                    total_conf += conf
 
-                        # Rule breakdown
-                        if rule not in rule_breakdown:
-                            rule_breakdown[rule] = {"real": 0, "fp": 0}
-                        if pred == "REAL":
-                            rule_breakdown[rule]["real"] += 1
-                        elif pred == "FALSE_POSITIVE":
-                            rule_breakdown[rule]["fp"] += 1
-                    except Exception:
-                        pass
+                    # Rule breakdown
+                    if rule not in rule_breakdown:
+                        rule_breakdown[rule] = {"real": 0, "fp": 0}
+                    if pred == "REAL":
+                        rule_breakdown[rule]["real"] += 1
+                    elif pred == "FALSE_POSITIVE":
+                        rule_breakdown[rule]["fp"] += 1
+                except Exception:
+                    pass
 
     return {
         "total_predictions": total,

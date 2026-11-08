@@ -1,0 +1,5 @@
+# Minimal gitleaks config: use the default rule set.
+# Add verified false positives under [allowlist] only — never to hide a
+# real secret. See https://github.com/gitleaks/gitleaks for rule docs.
+[extend]
+useDefault = true

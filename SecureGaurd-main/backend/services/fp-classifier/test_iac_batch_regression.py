@@ -31,9 +31,12 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# service.py reads the API key at import time; tests run against the
-# no-key local-dev configuration.
+# service.py reads the API key at import time and fails closed when no
+# key is configured; tests run against the explicit unauthenticated
+# local-dev opt-in (CLASSIFIER_ALLOW_UNAUTHENTICATED=1), not the old
+# fail-open no-key configuration.
 os.environ.pop("CLASSIFIER_API_KEY", None)
+os.environ["CLASSIFIER_ALLOW_UNAUTHENTICATED"] = "1"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

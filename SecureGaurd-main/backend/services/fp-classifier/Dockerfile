@@ -7,7 +7,10 @@ FROM python:3.12-slim
 WORKDIR /app/services/fp-classifier
 
 COPY services/fp-classifier/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# --require-hashes enforces the pinned hashes in requirements.txt
+# (supply-chain fix for unpinned dependencies); the file carries the
+# full resolved closure with a hash per package.
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY services/fp-classifier/ ./
 COPY services/severity-ranker/ ../severity-ranker/
