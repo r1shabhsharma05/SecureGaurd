@@ -42,7 +42,13 @@ const { getAllowedOrigins } = require('./config/cors');
 const app = express();
 
 const allowedOrigins = getAllowedOrigins();
-app.set('trust proxy', 1);
+// Trust-proxy hop count is env-configurable: the hosted Vercel -> Render
+// path appends X-Forwarded-For twice, so it needs TRUST_PROXY_HOPS=2;
+// the on-prem nginx path is a single hop (default 1). Undercounting
+// collapses req.ip to a shared edge IP and every per-IP rate limiter
+// shares one bucket.
+const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || '1', 10);
+app.set('trust proxy', Number.isNaN(trustProxyHops) ? 1 : trustProxyHops);
 // Security headers (F12). Helmet defaults are safe alongside CORS for a
 // JSON API; crossOriginResourcePolicy is relaxed to "cross-origin" so the
 // separately-hosted frontend can consume API responses (incl. generated

@@ -10,8 +10,10 @@
 // Turnstile widget in Cloudflare and sets the keys (HIS STEP). When the
 // secret IS set, a missing or invalid token is a hard 400 and a
 // Cloudflare outage is a 503 — never a silent pass.
-// shortcut: fail-open while unconfigured, upgrade: set TURNSTILE_SECRET_KEY
-// (Render) + VITE_TURNSTILE_SITE_KEY (Vercel) and the check enforces.
+// shortcut: fail-closed in production while unconfigured (503), skip
+// with a warning only outside production; upgrade: set
+// TURNSTILE_SECRET_KEY (Render) + VITE_TURNSTILE_SITE_KEY (Vercel) and
+// the check enforces.
 const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
 function isTurnstileConfigured(env = process.env) {
@@ -54,6 +56,12 @@ function requireTurnstile() {
   return async (req, res, next) => {
     const secret = process.env.TURNSTILE_SECRET_KEY;
     if (!secret) {
+      // Fail closed in production: an unset secret must never silently
+      // disable the captcha on the live contact form.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[turnstile] TURNSTILE_SECRET_KEY is not set in production — captcha check failing closed (503). Set the key to activate.');
+        return res.status(503).json({ message: 'Security check is unavailable. Please try again later.' });
+      }
       if (!warnedUnconfigured) {
         warnedUnconfigured = true;
         console.warn('[turnstile] TURNSTILE_SECRET_KEY is not set — captcha check skipped. Set the key to activate.');

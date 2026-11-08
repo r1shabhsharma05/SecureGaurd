@@ -59,9 +59,15 @@ function scanDockerfile(fullPath, relPath) {
         findings.push(createDockerFinding('DOCKER-002', relPath, lineNum, line));
       }
 
-      // DOCKER-003 Hardcoded Secrets in ENV/ARG
+      // DOCKER-003 Hardcoded Secrets in ENV/ARG. Redact the secret value
+      // (K8S-009 pattern): keep the variable name and the first two
+      // characters only — the value must never reach the finding snippet.
       if (/^(?:ENV|ARG)\s+.*(?:secret|password|passwd|token|key|cred).*\s*=\s*["']?[a-zA-Z0-9_\-!@#$%^&*()+=]{6,}["']?/i.test(trimmed)) {
-        findings.push(createDockerFinding('DOCKER-003', relPath, lineNum, line));
+        const secretMatch = trimmed.match(/^(ENV|ARG)\s+.*?([A-Za-z0-9_]*(?:secret|password|passwd|token|key|cred)[A-Za-z0-9_]*)\s*=\s*["']?([a-zA-Z0-9_\-!@#$%^&*()+=]{6,})/i);
+        const redacted = secretMatch
+          ? `${secretMatch[1]} ${secretMatch[2]}="${secretMatch[3].substring(0, 2)}****"`
+          : 'Hardcoded secret in Dockerfile ENV/ARG';
+        findings.push(createDockerFinding('DOCKER-003', relPath, lineNum, redacted));
       }
 
       // DOCKER-004 Risky ADD instruction

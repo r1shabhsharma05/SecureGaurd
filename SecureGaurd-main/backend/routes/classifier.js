@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middleware/auth');
+const { requireOrgContext, requireOrgRole } = require('../middleware/rbac');
 
 const CLASSIFIER_URL = process.env.FP_CLASSIFIER_URL || 'http://localhost:8001';
 const CLASSIFIER_API_KEY = process.env.CLASSIFIER_API_KEY || '';
@@ -28,14 +29,14 @@ async function fetchClassifier(path, options = {}) {
   }
 }
 
-// GET /api/classifier/status — health + metrics + model info (requires auth)
-router.get('/status', authMiddleware, async (req, res) => {
+// GET /api/classifier/status — coarse status only (org OWNER/ADMIN).
+// Never returns the internal classifier URL or raw model-info.
+router.get('/status', authMiddleware, requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   try {
-    // Fetch health, metrics, and model-info in parallel
-    const [healthRes, metricsRes, modelRes] = await Promise.allSettled([
+    // Fetch health and metrics in parallel
+    const [healthRes, metricsRes] = await Promise.allSettled([
       fetchClassifier('/health'),
       fetchClassifier('/metrics'),
-      fetchClassifier('/model-info'),
     ]);
 
     const running = healthRes.status === 'fulfilled' && healthRes.value.ok;
@@ -44,38 +45,27 @@ router.get('/status', authMiddleware, async (req, res) => {
       ? await metricsRes.value.json()
       : null;
 
-    const modelInfo = modelRes.status === 'fulfilled' && modelRes.value.ok
-      ? await modelRes.value.json()
-      : null;
-
     return res.json({
       running,
-      classifierUrl: CLASSIFIER_URL,
       metrics,
-      modelInfo,
       checkedAt: new Date().toISOString(),
     });
   } catch (err) {
     return res.json({
       running: false,
-      classifierUrl: CLASSIFIER_URL,
-      error: err.message,
       checkedAt: new Date().toISOString(),
     });
   }
 });
 
-// GET /api/classifier/health — public health probe (no auth)
+// GET /api/classifier/health — public health probe (no auth), coarse
+// { running: boolean } only; no upstream detail is re-served.
 router.get('/health', async (req, res) => {
   try {
     const response = await fetchClassifier('/health');
-    if (response.ok) {
-      const healthData = await response.json();
-      return res.json({ running: true, ...healthData });
-    }
-    return res.json({ running: false, status: response.status });
+    return res.json({ running: response.ok });
   } catch (err) {
-    return res.json({ running: false, error: 'Classifier service unreachable' });
+    return res.json({ running: false });
   }
 });
 

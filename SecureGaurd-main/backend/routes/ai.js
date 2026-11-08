@@ -23,8 +23,10 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
     });
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
 
-    // If fix already cached, return it
-    if (vuln.aiFix) {
+    // If fix already cached, return it — unless the cached value is the
+    // vulnerable snippet itself (persisted before the no-echo guard), in
+    // which case fall through and regenerate instead of returning it.
+    if (vuln.aiFix && vuln.aiFix !== vuln.codeSnippet) {
       return res.json({
         vulnId: vuln.id,
         fixedCode: vuln.aiFix,
@@ -35,6 +37,18 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
 
     // Generate AI fix
     const result = await generateAiFix(vuln);
+
+    // No automated fix exists for this snippet: say so explicitly. Never
+    // cache or return the original vulnerable code as the "fix".
+    if (result.noFixAvailable) {
+      return res.json({
+        vulnId: vuln.id,
+        noFixAvailable: true,
+        message: 'No automated fix is available for this vulnerability. Review it manually and apply a fix.',
+        engine: result.engine,
+        cached: false
+      });
+    }
 
     // Cache the fix in the database — only in aiFix.
     // Never overwrite description/cweId: they hold the scanner's

@@ -121,9 +121,15 @@ function scanTerraformFile(fullPath, relPath) {
         findings.push(createIaCFinding('TF-004', relPath, lineNum, line, currentResourceType || 'aws_iam_policy', currentResourceName || 'iam_policy'));
       }
 
-      // Check TF-005: Hardcoded credentials/keys
+      // Check TF-005: Hardcoded credentials/keys. Redact the secret value
+      // (K8S-009 pattern): keep the attribute name and the first two
+      // characters only — the value must never reach the finding snippet.
       if (/(?:access_key|secret_key|aws_secret_access_key|password)\s*=\s*["'][a-zA-Z0-9_\-!@#$%^&*()+=]{8,}["']/i.test(trimmed) && !/var\./i.test(trimmed)) {
-        findings.push(createIaCFinding('TF-005', relPath, lineNum, line, currentResourceType || 'provider', currentResourceName || 'credentials'));
+        const credMatch = trimmed.match(/((?:access_key|secret_key|aws_secret_access_key|password)\s*=\s*["'])([a-zA-Z0-9_\-!@#$%^&*()+=]{8,})(["'])/i);
+        const redacted = credMatch
+          ? `${credMatch[1]}${credMatch[2].substring(0, 2)}****${credMatch[3]}`
+          : `Hardcoded credential in ${currentResourceName || 'credentials'}`;
+        findings.push(createIaCFinding('TF-005', relPath, lineNum, redacted, currentResourceType || 'provider', currentResourceName || 'credentials'));
       }
     }
 

@@ -252,6 +252,18 @@ router.patch('/:id/label', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asyn
       where: { id: vuln.id },
       data: { userLabel: label },
     });
+
+    // Audit every label so retraining data is attributable to the labeler
+    // (same shape as the status route above).
+    await createAuditLog(
+      req.organizationId,
+      req.userId,
+      'VULNERABILITY_LABEL_UPDATED',
+      'VULNERABILITY',
+      String(vuln.id),
+      { title: vuln.title, previousLabel: vuln.userLabel, label, labeledAt: new Date().toISOString() }
+    );
+
     res.json({ success: true, id: updated.id, userLabel: updated.userLabel });
   } catch (err) {
     console.error('Error updating label:', err);

@@ -13,13 +13,17 @@ const FIX_RULES = {
     confidence: 97,
     explanation: 'SQL queries must use parameterized statements or an ORM query builder. String concatenation and template literals in SQL allow attackers to inject arbitrary commands.',
     fixTemplate: (snippet) => {
-      // Replace raw string concat with parameterized query
+      // Replace raw string concat with parameterized query. A no-match
+      // .replace() returns the input unchanged (truthy), so the fallback
+      // must be gated on an actual change, not on ||.
       const fixed = snippet
         .replace(/`SELECT\s+(.*?)\s+WHERE\s+(\w+)\s*=\s*\$\{([^}]+)\}`/gi,
           'db.query(\'SELECT $1 WHERE $2 = ?\', [$3])')
         .replace(/`SELECT\s+(.*?)\s+FROM\s+(.*?)\s+WHERE\s+(.*?)\s*\+\s*([^`]+)`/gi,
-          'db.query(\'SELECT $1 FROM $2 WHERE $3 = ?\', [userInput])')
-        || `// FIXED: Use parameterized query instead\nconst result = await db.query(\n  'SELECT * FROM users WHERE id = ?',\n  [sanitizedId]\n);`;
+          'db.query(\'SELECT $1 FROM $2 WHERE $3 = ?\', [userInput])');
+      if (fixed === snippet) {
+        return `// FIXED: Use parameterized query instead\nconst result = await db.query(\n  'SELECT * FROM users WHERE id = ?',\n  [sanitizedId]\n);`;
+      }
       return fixed;
     },
     cweId: 'CWE-89',
@@ -31,10 +35,13 @@ const FIX_RULES = {
     confidence: 94,
     explanation: 'User-controlled inputs must be sanitized before being reflected in HTTP responses. Use a library like DOMPurify or encode special characters to prevent script injection.',
     fixTemplate: (snippet) => {
-      return snippet
+      const fixed = snippet
         .replace(/res\.send\(`(.*)(\$\{req\.(query|body|params)\.[^}]+\})(.*)`\)/,
-          `const sanitized = encodeURIComponent($2);\nres.send(\`$1\${sanitized}$4\`)`)
-        || `// FIXED: Sanitize user input before rendering\nconst sanitized = encodeURIComponent(req.query.input || '');\nres.send(\`<h1>Hello \${sanitized}</h1>\`);`;
+          `const sanitized = encodeURIComponent($2);\nres.send(\`$1\${sanitized}$4\`)`);
+      if (fixed === snippet) {
+        return `// FIXED: Sanitize user input before rendering\nconst sanitized = encodeURIComponent(req.query.input || '');\nres.send(\`<h1>Hello \${sanitized}</h1>\`);`;
+      }
+      return fixed;
     },
     cweId: 'CWE-79',
     cvssScore: 7.4,
@@ -56,10 +63,13 @@ const FIX_RULES = {
     confidence: 99,
     explanation: 'JWT secrets must be loaded from environment variables, never hardcoded. Hardcoded secrets are trivially extractable from source code or compiled binaries.',
     fixTemplate: (snippet) => {
-      return snippet
+      const fixed = snippet
         .replace(/jwt\.verify\(([^,]+),\s*['"`][^'"`]+['"`]\)/,
-          'jwt.verify($1, process.env.JWT_SECRET)')
-        || `// FIXED: Load secret from environment variable\nconst decoded = jwt.verify(token, process.env.JWT_SECRET);\nif (!decoded) throw new Error('Invalid token');`;
+          'jwt.verify($1, process.env.JWT_SECRET)');
+      if (fixed === snippet) {
+        return `// FIXED: Load secret from environment variable\nconst decoded = jwt.verify(token, process.env.JWT_SECRET);\nif (!decoded) throw new Error('Invalid token');`;
+      }
+      return fixed;
     },
     cweId: 'CWE-798',
     cvssScore: 9.1,
@@ -245,7 +255,7 @@ async function generateAiFix(vulnerability) {
   const web2apiUrl = process.env.GEMINI_WEB2API_URL || 'http://localhost:8081/v1';
   try {
     const web2apiResult = await callGeminiWeb2Api(vulnerability, web2apiUrl);
-    if (web2apiResult) return web2apiResult;
+    if (web2apiResult) return checkedResult(web2apiResult, vulnerability);
   } catch {
     // web2api proxy not running, try official API key
   }
@@ -254,7 +264,7 @@ async function generateAiFix(vulnerability) {
   if (process.env.GEMINI_API_KEY) {
     try {
       const geminiResult = await callGeminiAPI(vulnerability);
-      if (geminiResult) return geminiResult;
+      if (geminiResult) return checkedResult(geminiResult, vulnerability);
     } catch (err) {
       console.warn('[AI Engine] Gemini API failed, falling back to rule engine:', err.message);
     }
@@ -264,7 +274,7 @@ async function generateAiFix(vulnerability) {
   const rule = FIX_RULES[title] || DEFAULT_FIX;
   const fixedCode = rule.fixTemplate(codeSnippet || '');
 
-  return {
+  return checkedResult({
     fixedCode,
     explanation: rule.explanation,
     confidence: rule.confidence,
@@ -272,7 +282,27 @@ async function generateAiFix(vulnerability) {
     cvssScore: rule.cvssScore || 5.0,
     references: rule.references || [],
     engine: 'rule-based'
-  };
+  }, vulnerability);
+}
+
+// Boundary guard: a "fix" identical to the vulnerable input (or empty) is
+// not a fix. Return an explicit no-fix result instead of echoing the
+// vulnerable code back as remediated — no caller may cache or present it.
+function checkedResult(result, vulnerability) {
+  const snippet = (vulnerability.codeSnippet || '').trim();
+  if (!result.fixedCode || (snippet && result.fixedCode.trim() === snippet)) {
+    return {
+      fixedCode: null,
+      noFixAvailable: true,
+      explanation: 'No automated fix is available for this code snippet. Review the vulnerability manually and apply a fix.',
+      confidence: 0,
+      cweId: result.cweId || 'CWE-20',
+      cvssScore: result.cvssScore || 5.0,
+      references: result.references || [],
+      engine: result.engine
+    };
+  }
+  return result;
 }
 
 // ── Gemini Web2API Integration (1.5M Token Context Proxy) ────────────────────
@@ -362,10 +392,12 @@ Respond in valid JSON only (no markdown):
 }`;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // API key as a header, never a ?key= query parameter (query strings
+      // are logged by proxies and end up in access logs).
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
