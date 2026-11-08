@@ -96,22 +96,55 @@ paths:
       lookupImpl: stubLookup({ 'mixed.example': ['93.184.216.34', '10.1.2.3'] }),
       fetchImpl: stubFetch({})
     }), 'one private address among public ones still blocks');
+  const seenUrls = [];
+  const recordingFetch = (mapping) => {
+    const stub = stubFetch(mapping);
+    return async (url, opts) => { seenUrls.push(url); return stub(url, opts); };
+  };
   const ok = await fetchPublicSpec('https://public.example/openapi.yaml', {
     lookupImpl: stubLookup({ 'public.example': ['93.184.216.34'] }),
-    fetchImpl: stubFetch({ 'https://public.example/openapi.yaml': { status: 200, bodyText: VULN_SPEC } })
+    fetchImpl: recordingFetch({ 'https://93.184.216.34/openapi.yaml': { status: 200, bodyText: VULN_SPEC } })
   });
   assert(ok.content.includes('openapi: 3.0.0'), 'public host fetch returns spec content');
+  assert(seenUrls.length === 1 && seenUrls[0] === 'https://93.184.216.34/openapi.yaml',
+    'transport is called with the validated IP URL, never the hostname (no second DNS lookup)');
+  assert(ok.finalUrl === 'https://public.example/openapi.yaml', 'finalUrl still reports the hostname URL');
 
   console.log('\n[Group 5] Redirect hop re-validation');
   await assertRejects(
     fetchPublicSpec('https://public.example/start', {
       lookupImpl: stubLookup({ 'public.example': ['93.184.216.34'], 'evil.example': ['127.0.0.1'] }),
       fetchImpl: stubFetch({
-        'https://public.example/start': { status: 302, location: 'http://evil.example/spec.yaml' }
+        'https://93.184.216.34/start': { status: 302, location: 'http://evil.example/spec.yaml' }
       })
     }), 'redirect to private host blocked');
 
-  console.log('\n[Group 6] Ingested spec scans through the real API scanner');
+  console.log('\n[Group 7] DNS rebinding — real pinned transport, no fetch stub');
+  // Audit repro: validation lookup returns only a public IP, but a
+  // loopback server listens on the hostname's real address. The fetch
+  // must dial ONLY the validated public IP, so the loopback server must
+  // see zero hits (previously it served the spec).
+  const http = require('http');
+  let loopbackHits = 0;
+  const loopback = http.createServer((req, res) => {
+    loopbackHits++;
+    res.writeHead(200, { 'Content-Type': 'text/yaml' });
+    res.end('openapi: 3.0.0\n');
+  });
+  await new Promise((resolve) => loopback.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = loopback.address().port;
+    await assertRejects(
+      fetchPublicSpec(`http://localhost:${port}/spec.yaml`, {
+        lookupImpl: stubLookup({ localhost: ['93.184.216.34'] }),
+      }),
+      'rebound fetch rejects instead of serving loopback content');
+    assert(loopbackHits === 0, `loopback server saw 0 hits (saw ${loopbackHits})`);
+  } finally {
+    loopback.close();
+  }
+
+  console.log('\n[Group 8] Ingested spec scans through the real API scanner');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-ingest-'));
   try {
     const tmpFile = path.join(tmpDir, 'spec.yaml');

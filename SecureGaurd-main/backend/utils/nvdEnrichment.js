@@ -40,12 +40,27 @@ function compareVersions(a, b) {
   return 0;
 }
 
+// A version is only range-matchable when it parses as a dotted numeric
+// version (optional leading 'v', optional pre-release/build suffix).
+// 'unknown' and friends are NOT 0.0.0: compareVersions('unknown', x)
+// parses every segment as 0, so an unknown version used to "match" any
+// range ending above 0.0.0 and inherit CVEs it cannot prove.
+function isParseableVersion(version) {
+  if (typeof version !== 'string') return false;
+  const v = version.trim().replace(/^v/i, '');
+  return /^\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$/.test(v);
+}
+
 function cpeProduct(criteria) {
   const parts = String(criteria || '').split(':');
   return (parts[4] || '').toLowerCase();
 }
 
 function versionInRange(version, match, componentName) {
+  // Unparseable version ('unknown', ''): no range can be assessed, so
+  // nothing matches. Returning false here is what stops unknown-version
+  // components from being attributed CVEs.
+  if (!isParseableVersion(version)) return false;
   // A CVE's configuration lists EVERY product it affects (lodash plus
   // dozens of Oracle/Siemens products that embed it). A range belonging
   // to a different product must never match this component: e.g. an
@@ -129,6 +144,22 @@ async function enrichComponent({ name, version }, fetchImpl = fetch) {
   if (hit && Date.now() - hit.fetchedAtMs < CACHE_TTL_MS) {
     return { ...hit.result, cached: true };
   }
+  // Unversioned component: no NVD query is even attempted — without a
+  // parseable version no range can be assessed, so the honest answer is
+  // "not assessed", never a list of CVEs matched against 0.0.0.
+  if (!isParseableVersion(version)) {
+    const result = {
+      component: key,
+      source: 'NVD API 2.0',
+      fetchedAt: new Date().toISOString(),
+      cached: false,
+      nvdTotalResults: 0,
+      cves: [],
+      versionNote: 'version unknown — range match not assessed',
+    };
+    cache.set(key, { fetchedAtMs: Date.now(), result });
+    return result;
+  }
   const { totalResults, cves } = await queryNvd(name, fetchImpl);
   // Keep only the CPE matches that actually matched this component, so
   // the response never implies an unrelated product's range is evidence.
@@ -154,5 +185,5 @@ function clearNvdCache() {
 
 module.exports = {
   queryNvd, enrichComponent, parseNvdResponse, versionInRange, cpeProduct,
-  compareVersions, clearNvdCache, NVD_API,
+  compareVersions, isParseableVersion, clearNvdCache, NVD_API,
 };

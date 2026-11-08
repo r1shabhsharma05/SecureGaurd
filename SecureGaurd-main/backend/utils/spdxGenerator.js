@@ -5,7 +5,7 @@
  * dependency relationships, and associated SCA vulnerability references.
  */
 
-const { crypto } = require('crypto');
+const crypto = require('crypto');
 const v4 = () => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
 /**
@@ -64,9 +64,20 @@ function generateSpdxDocument({ repository, scanId, components = [], vulnerabili
   // Track ecosystem set
   const ecosystemsSet = new Set();
 
+  // SPDXIDs must be unique in the document: sanitisation is lossy
+  // ('foo_bar' and 'foo-bar' both sanitise to 'foo-bar'), so a colliding
+  // ID is disambiguated with a short hash of the ORIGINAL
+  // ecosystem/name/version. Declared ONCE, outside the loop — a
+  // per-iteration set could never see a collision.
+  const seenSpdxIds = new Set([rootPkgId]);
+
   components.forEach((comp, idx) => {
     ecosystemsSet.add(comp.ecosystem);
-    const spdxPkgId = `SPDXRef-Package-${sanitizeSpdxIdToken(comp.ecosystem)}-${sanitizeSpdxIdToken(comp.name)}-${sanitizeSpdxIdToken(comp.version)}`;
+    let spdxPkgId = `SPDXRef-Package-${sanitizeSpdxIdToken(comp.ecosystem)}-${sanitizeSpdxIdToken(comp.name)}-${sanitizeSpdxIdToken(comp.version)}`;
+    if (seenSpdxIds.has(spdxPkgId)) {
+      spdxPkgId = `${spdxPkgId}-${crypto.createHash('sha256').update(comp.ecosystem + ':' + comp.name + '@' + comp.version).digest('hex').slice(0, 8)}`;
+    }
+    seenSpdxIds.add(spdxPkgId);
 
     // Cross-reference with SCA Vulnerabilities
     const matchedVulns = scaFindings.filter(v => {

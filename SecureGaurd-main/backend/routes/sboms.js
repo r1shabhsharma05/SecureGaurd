@@ -7,6 +7,22 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 router.use(authMiddleware);
 router.use(requireOrgContext);
 
+// Build a safe Content-Disposition value for an SBOM download. The SBOM
+// name comes from the repository name (attacker-controlled), so the
+// filename is sanitized: quotes, semicolons, CR/LF and control characters
+// are stripped, and an empty result falls back to a server-generated
+// `sbom-<id>.<suffix>` name. The ASCII filename= parameter carries the
+// sanitized name and filename* carries the RFC 5987 UTF-8 encoding, so
+// no injected quote, parameter separator or filename* value can rename
+// the download (the saved name always ends in the intended suffix).
+function downloadDisposition(sbom, suffix) {
+  const base = String(sbom.name || '').replace(/[";\r\n\x00-\x1F\x7F]/g, '').trim();
+  const filename = base ? `${base}.${suffix}` : `sbom-${sbom.id}.${suffix}`;
+  const ascii = filename.replace(/[^\x20-\x7E]/g, '-');
+  const encoded = encodeURIComponent(filename).replace(/'/g, '%27');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
 // GET /api/sboms — list all SBOMs for active organization
 router.get('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
   try {
@@ -84,9 +100,8 @@ router.get('/:id/download', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDI
       { sbomName: sbom.name, repositoryId: sbom.repositoryId }
     );
 
-    const filename = `${sbom.name || 'sbom'}.spdx.json`;
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', downloadDisposition(sbom, 'spdx.json'));
     res.send(JSON.stringify(sbom.spdxDoc, null, 2));
   } catch (err) {
     console.error('Error downloading SBOM:', err);
@@ -120,9 +135,8 @@ router.get('/:id/cyclonedx', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUD
       { sbomName: sbom.name, repositoryId: sbom.repositoryId, format: 'cyclonedx-1.6' }
     );
 
-    const filename = `${sbom.name || 'sbom'}.cyclonedx.json`;
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', downloadDisposition(sbom, 'cyclonedx.json'));
     res.send(JSON.stringify(sbom.cycloneDxDoc, null, 2));
   } catch (err) {
     console.error('Error downloading CycloneDX SBOM:', err);

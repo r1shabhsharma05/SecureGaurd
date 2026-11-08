@@ -64,12 +64,19 @@ router.get('/export-feedback', async (req, res, next) => {
       });
       where.scan = { organizationId: { in: memberships.map(m => m.organizationId) } };
     }
+    // Unbounded export: cap the rows returned (default 1000, max 5000)
+    // so one export cannot dump the whole labeled-findings table.
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const take = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 5000)
+      : 1000;
     const vulns = await prisma.vulnerability.findMany({
       where,
       select: {
         userLabel: true,
         mlFeatures: true
-      }
+      },
+      take,
     });
 
     const formatted = vulns.map(v => {
@@ -408,7 +415,26 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
       if (!cycloneValid.isValid) console.error('CycloneDX invalid, not stored:', cycloneValid.errors);
 
       const validation = validateSpdxDocument(spdxDocument);
+      // If SPDX is invalid, log the errors and still store the valid
+      // CycloneDX document instead of silently dropping both formats.
+      // spdxDoc is a required column, so the stored SPDX is a minimal
+      // valid document (root package only) whose comment records the
+      // validation failure; the generated invalid SPDX is never persisted.
+      let spdxToStore = null;
       if (validation.isValid) {
+        spdxToStore = spdxDocument;
+      } else {
+        console.error('SPDX invalid, storing CycloneDX only:', validation.errors);
+        if (cycloneValid.isValid) {
+          const rootPkg = spdxDocument.packages[0];
+          spdxToStore = {
+            ...spdxDocument,
+            packages: [{ ...rootPkg, comment: `SPDX generation failed validation (${validation.errors.join('; ')}); see the stored CycloneDX document.` }],
+            relationships: spdxDocument.relationships.filter((r) => r.relatedSpdxElement === rootPkg.SPDXID),
+          };
+        }
+      }
+      if (spdxToStore) {
         await prisma.sbom.create({
           data: {
             organizationId: req.organizationId,
@@ -423,7 +449,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
             transitiveCount: sbomStats.transitiveCount,
             vulnerableCount: sbomStats.vulnerableCount,
             ecosystems: sbomStats.ecosystems,
-            spdxDoc: spdxDocument,
+            spdxDoc: spdxToStore,
             cycloneDxDoc: cycloneValid.isValid ? cycloneDxDocument : null
           }
         });
@@ -436,6 +462,8 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
           String(scan.id),
           { repoName: repo.name, componentCount: sbomStats.componentCount, vulnerableCount: sbomStats.vulnerableCount }
         );
+      } else {
+        console.error('SBOM not stored: both SPDX and CycloneDX documents are invalid');
       }
     } catch (sbomErr) {
       console.error('Error generating SBOM during scan:', sbomErr);

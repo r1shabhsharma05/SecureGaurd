@@ -684,11 +684,26 @@ function parseManifestFile(fullPath, relPath) {
 
 /**
  * Traverses repository directory, extracts raw components, and deduplicates.
+ *
+ * Symlink containment (same rule as utils/securityScanner.js): entries are
+ * lstat'ed and symlinks skipped, directories are realpath-resolved and
+ * required to stay inside the real scan root, visited directory inodes are
+ * tracked, and traversal depth is capped.
  */
+const MAX_TRAVERSAL_DEPTH = 32;
+
 function extractRepositorySbomComponents(projectPath) {
   const allComponents = [];
+  let rootReal = projectPath;
+  try {
+    rootReal = fs.realpathSync(projectPath);
+  } catch {
+    // keep projectPath; traversal below still skips symlinks
+  }
+  const visitedDirs = new Set();
 
-  function traverse(dir) {
+  function traverse(dir, depth = 0) {
+    if (depth > MAX_TRAVERSAL_DEPTH) return;
     let list = [];
     try {
       list = fs.readdirSync(dir);
@@ -713,15 +728,27 @@ function extractRepositorySbomComponents(projectPath) {
         continue;
       }
 
+      // lstat, not stat: a symlink must never be followed.
       let stat;
       try {
-        stat = fs.statSync(fullPath);
+        stat = fs.lstatSync(fullPath);
       } catch {
         continue;
       }
+      if (stat.isSymbolicLink()) continue;
 
       if (stat.isDirectory()) {
-        traverse(fullPath);
+        let realPath;
+        try {
+          realPath = fs.realpathSync(fullPath);
+        } catch {
+          continue;
+        }
+        if (realPath !== rootReal && !realPath.startsWith(rootReal + path.sep)) continue;
+        const inodeKey = `${stat.dev}:${stat.ino}`;
+        if (visitedDirs.has(inodeKey)) continue;
+        visitedDirs.add(inodeKey);
+        traverse(fullPath, depth + 1);
       } else if (stat.isFile()) {
         const extracted = parseManifestFile(fullPath, relPath);
         if (extracted.length > 0) {
