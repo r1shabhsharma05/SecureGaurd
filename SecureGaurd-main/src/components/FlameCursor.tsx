@@ -164,6 +164,16 @@ export default function FlameCursor() {
       P.lastMove = performance.now();
     }
 
+    /* True while the pointer is over a text field — the flame steps aside
+       there (no new embers, puffs, blades or tip) so the native I-beam is
+       the only pointer and typed text stays readable. Existing particles
+       fade out on their own; the flame resumes when the pointer leaves. */
+    let overTextField = false;
+    const onMouseOver = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      overTextField = !!t?.closest?.('input, textarea, [contenteditable="true"]');
+    };
+
     /* ══════════════════════════════════════════
        PARTICLE POOLS
        ══════════════════════════════════════════ */
@@ -433,6 +443,7 @@ export default function FlameCursor() {
       const moving = idle < 120;
       const speedFactor = clamp(P.speed / 300, 0, 1);
 
+      if (!overTextField) {
       /* ── Ambient ember emission ── */
       ambE -= dt;
       if (ambE <= 0) {
@@ -529,6 +540,7 @@ export default function FlameCursor() {
           }
         }
       }
+      } // end if (!overTextField) — no new flame over text fields
 
       /* ═══════════ DRAW ═══════════ */
       ctx.clearRect(0, 0, W, H);
@@ -777,7 +789,9 @@ export default function FlameCursor() {
       }
 
       /* ── Cursor tip — Flame Breathing living flame core ── */
-      {
+      // Hidden over text fields (see overTextField above) — the I-beam
+      // is the only pointer there.
+      if (!overTextField) {
         const flicker =
           0.88 +
           0.08 * Math.sin(now * 0.013) +
@@ -908,6 +922,7 @@ export default function FlameCursor() {
     };
     window.addEventListener('resize', resize);
     window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseover', onMouseOver);
     window.addEventListener('touchmove', onTouchMove, { passive: true });
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -918,6 +933,7 @@ export default function FlameCursor() {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseover', onMouseOver);
       window.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('touchstart', onTouchStart);
