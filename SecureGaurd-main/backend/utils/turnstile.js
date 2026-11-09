@@ -4,16 +4,20 @@
 // The widget lives in the frontend (TurnstileWidget.tsx); this module is
 // the only place the secret key is used — it never leaves the server.
 // Activation is env-gated, the same pattern as the other optional
-// integrations in this codebase (see config/env.js): when
-// TURNSTILE_SECRET_KEY is unset the guard passes requests through and
-// warns once, so the forms keep working until Rishabh creates the
-// Turnstile widget in Cloudflare and sets the keys (HIS STEP). When the
-// secret IS set, a missing or invalid token is a hard 400 and a
-// Cloudflare outage is a 503 — never a silent pass.
-// shortcut: fail-closed in production while unconfigured (503), skip
-// with a warning only outside production; upgrade: set
-// TURNSTILE_SECRET_KEY (Render) + VITE_TURNSTILE_SITE_KEY (Vercel) and
-// the check enforces.
+// integrations in this codebase (see config/env.js). When the secret IS
+// set, a missing or invalid token is a hard 400 and a Cloudflare outage
+// is a 503 — never a silent pass.
+//
+// When TURNSTILE_SECRET_KEY is UNSET the guard passes requests through
+// and logs a loud error once, so the forms keep working until Rishabh
+// creates the Turnstile widget in Cloudflare and sets the keys (HIS
+// STEP: set TURNSTILE_SECRET_KEY on Render + VITE_TURNSTILE_SITE_KEY on
+// Vercel, then the check enforces). This used to fail CLOSED with a 503
+// in production while unconfigured — which broke signup, forgot-password
+// AND the contact form for every user (production register returned 503
+// from 2026-11-08 until this fix on 2026-11-09) because the keys were
+// never set. Fail-open-with-warning is the deliberate tradeoff until
+// then: a working site without a captcha beats a broken site with one.
 const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
 function isTurnstileConfigured(env = process.env) {
@@ -56,15 +60,14 @@ function requireTurnstile() {
   return async (req, res, next) => {
     const secret = process.env.TURNSTILE_SECRET_KEY;
     if (!secret) {
-      // Fail closed in production: an unset secret must never silently
-      // disable the captcha on the live contact form.
-      if (process.env.NODE_ENV === 'production') {
-        console.error('[turnstile] TURNSTILE_SECRET_KEY is not set in production — captcha check failing closed (503). Set the key to activate.');
-        return res.status(503).json({ message: 'Security check is unavailable. Please try again later.' });
-      }
+      // No secret configured: the captcha cannot verify anything, so
+      // there is nothing to enforce. Pass through with a loud warning
+      // (once) instead of failing closed — a 503 here broke signup,
+      // forgot-password and the contact form for every user while the
+      // keys were unset. Set TURNSTILE_SECRET_KEY to turn enforcement on.
       if (!warnedUnconfigured) {
         warnedUnconfigured = true;
-        console.warn('[turnstile] TURNSTILE_SECRET_KEY is not set — captcha check skipped. Set the key to activate.');
+        console.error('[turnstile] TURNSTILE_SECRET_KEY is not set — captcha check skipped. Signup/forgot-password/contact work WITHOUT a captcha until the key is set (Render) + VITE_TURNSTILE_SITE_KEY (Vercel).');
       }
       return next();
     }

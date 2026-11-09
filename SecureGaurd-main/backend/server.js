@@ -37,11 +37,9 @@ const alertRoutes = require('./routes/alerts');
 const customRulesRoutes = require('./routes/customRules');
 const publicRoutes = require('./routes/public');
 const prisma = require('./prismaClient');
-const { getAllowedOrigins } = require('./config/cors');
+const { isAllowedOrigin } = require('./config/cors');
 
 const app = express();
-
-const allowedOrigins = getAllowedOrigins();
 // Trust-proxy hop count is env-configurable: the hosted Vercel -> Render
 // path appends X-Forwarded-For twice, so it needs TRUST_PROXY_HOPS=2;
 // the on-prem nginx path is a single hop (default 1). Undercounting
@@ -56,10 +54,17 @@ app.set('trust proxy', Number.isNaN(trustProxyHops) ? 1 : trustProxyHops);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Blocked by CORS policy: Origin not allowed'));
+      // Deny WITHOUT an error: throwing here (the old code called
+      // callback(new Error('Blocked by CORS policy...'))) turned every
+      // disallowed-origin request into a 500 "Server error" — which is
+      // what every Preview deployment saw before the Preview pattern in
+      // config/cors.js existed. The browser still blocks the response
+      // without CORS headers, so the denial stands; it just no longer
+      // masquerades as a server crash.
+      callback(null, false);
     }
   },
   credentials: true
