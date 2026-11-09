@@ -100,14 +100,11 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
     }
   };
 
-  // ── Titles (forgot / reset only — login / signup titles live in NeonAuth) ──
-  const titles = {
-    forgot: { h: 'Forgot your password?', sub: 'Enter your email and we\'ll send a reset link.' },
-    reset: { h: 'Reset your password', sub: 'Enter the reset token and your new password.' },
-  };
-  const { h, sub } = titles[mode as 'forgot' | 'reset'];
-
   // ── Login / Signup: neon lamp design (NeonAuth) with real SecureGuard auth ──
+  // NOTE: this early return MUST stay above the forgot/reset `titles`
+  // destructure below — titles only has forgot/reset keys, so destructuring
+  // it while mode is login/signup throws and the error boundary swallows
+  // the page (this exact bug crashed the Preview on 2026-11-09).
   if (mode === 'login' || mode === 'signup') {
     return (
       <NeonAuth
@@ -118,6 +115,13 @@ const AuthPage: React.FC<AuthPageProps> = ({ defaultMode }) => {
       />
     );
   }
+
+  // ── Titles (forgot / reset only — login / signup titles live in NeonAuth) ──
+  const titles = {
+    forgot: { h: 'Forgot your password?', sub: 'Enter your email and we\'ll send a reset link.' },
+    reset: { h: 'Reset your password', sub: 'Enter the reset token and your new password.' },
+  };
+  const { h, sub } = titles[mode as 'forgot' | 'reset'];
 
   return (
     <div className="auth-container">
