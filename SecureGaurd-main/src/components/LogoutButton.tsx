@@ -10,8 +10,13 @@ import './LogoutButton.css';
 
 type AnimState = 'default' | 'hover' | 'walking1' | 'walking2' | 'falling1' | 'falling2' | 'falling3';
 
-// CSS custom properties per state — same values as the demo. The durations
-// are plain numbers because the CSS multiplies them: calc(var(--x) * 1ms).
+// CSS custom properties per state — same values as the demo. Every state
+// carries the FULL set: the demo's setProperty only ever adds keys, so a
+// value set by an earlier state stays until a later state overrides it —
+// but React REMOVES a custom property that is absent from the new style
+// object, which snapped the figure back to its start pose mid-animation.
+// So falling1/2/3 below are walking2's values with the demo's per-state
+// overrides applied on top (keys the demo never sets stay as walking2).
 const STATE_VARS: Record<AnimState, Record<string, string>> = {
   default: {
     '--figure-duration': '100',
@@ -67,6 +72,7 @@ const STATE_VARS: Record<AnimState, Record<string, string>> = {
   },
   falling1: {
     '--figure-duration': '1600',
+    '--transform-figure': 'translateX(17px)',
     '--walking-duration': '400',
     '--transform-arm1': 'rotate(-60deg)',
     '--transform-wrist1': 'none',
@@ -75,23 +81,31 @@ const STATE_VARS: Record<AnimState, Record<string, string>> = {
     '--transform-leg1': 'rotate(-30deg)',
     '--transform-calf1': 'rotate(-20deg)',
     '--transform-leg2': 'rotate(20deg)',
+    '--transform-calf2': 'rotate(-20deg)',
   },
   falling2: {
+    '--figure-duration': '1600',
+    '--transform-figure': 'translateX(17px)',
     '--walking-duration': '300',
     '--transform-arm1': 'rotate(-100deg)',
+    '--transform-wrist1': 'none',
     '--transform-arm2': 'rotate(-60deg)',
     '--transform-wrist2': 'rotate(60deg)',
     '--transform-leg1': 'rotate(80deg)',
     '--transform-calf1': 'rotate(20deg)',
     '--transform-leg2': 'rotate(-60deg)',
+    '--transform-calf2': 'rotate(-20deg)',
   },
   falling3: {
+    '--figure-duration': '1600',
+    '--transform-figure': 'translateX(17px)',
     '--walking-duration': '500',
     '--transform-arm1': 'rotate(-30deg)',
     '--transform-wrist1': 'rotate(40deg)',
     '--transform-arm2': 'rotate(50deg)',
     '--transform-wrist2': 'none',
     '--transform-leg1': 'rotate(-30deg)',
+    '--transform-calf1': 'rotate(20deg)',
     '--transform-leg2': 'rotate(20deg)',
     '--transform-calf2': 'none',
   },
