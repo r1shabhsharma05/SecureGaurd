@@ -1,0 +1,29 @@
+/* Flame cursor canvases — fixed overlays above the page, never intercept
+   input (pointer-events: none), so clicks pass straight through. */
+#flame-cursor-main,
+#flame-cursor-hd {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#flame-cursor-hd {
+  z-index: 9998;
+}
+
+#flame-cursor-main {
+  z-index: 9999;
+}
+
+/* The flame IS the cursor: hide the native pointer everywhere, except
+   text fields, where the I-beam stays so typing stays usable. */
+body.flame-cursor-on,
+body.flame-cursor-on * {
+  cursor: none !important;
+}
+
+body.flame-cursor-on input,
+body.flame-cursor-on textarea,
+body.flame-cursor-on [contenteditable="true"] {
+  cursor: text !important;
+}

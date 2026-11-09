@@ -1,34 +1,71 @@
-/* Day 8 — custom 404 page. */
-.not-found { padding: 5rem 0 7rem; text-align: center; }
-.not-found .breadcrumbs { text-align: left; }
-.not-found-code {
-  margin: 2rem 0 0;
-  font-size: 5rem;
-  font-weight: 800;
-  letter-spacing: -0.04em;
-  line-height: 1;
-  color: var(--accent-blue, #0055ff);
-}
-.not-found h1 { margin-top: 0.5rem; }
-.not-found-body {
-  max-width: 30rem;
-  margin: 0.75rem auto 0;
-  color: var(--text-dim, #a1a1aa);
-  line-height: 1.6;
-}
-.not-found-actions {
+/*======================
+    404 page — port of the user's CodePen design.
+    No Bootstrap: the centered column is flexbox; Arvo loads from
+    index.html. The GIF stays hotlinked from the Dribbble CDN, exactly
+    as in the user's original — a binary asset can't go through the
+    GitHub App snapshot-push used for this repo, and the page degrades
+    gracefully (404 + text + button) if the CDN is ever unreachable.
+=======================*/
+
+.page_404 {
+  padding: 40px 0;
+  background: #fff;
+  font-family: 'Arvo', serif;
+  min-height: 100vh;
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  margin-top: 1.75rem;
 }
-.not-found-action {
-  padding: 0.65rem 1.15rem;
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #27272a);
-  color: var(--text-main, #fff);
+
+.page_404-container {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 15px;
+  text-align: center;
+}
+
+.four_zero_four_bg {
+  background-image: url(https://cdn.dribbble.com/users/285475/screenshots/2083086/dribbble_1.gif);
+  height: 400px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.four_zero_four_bg h1 {
+  font-size: 80px;
+  text-align: center;
+  margin: 0;
+  color: #262626;
+}
+
+.contant_box_404 {
+  margin-top: -50px;
+}
+
+.contant_box_404 h3 {
+  font-size: 30px;
+  margin: 0 0 10px;
+  color: #262626;
+}
+
+.contant_box_404 p {
+  font-size: 16px;
+  color: #555;
+  margin: 0 0 10px;
+}
+
+.link_404 {
+  color: #fff !important;
+  padding: 10px 20px;
+  background: #39ac31;
+  margin: 20px 0;
+  display: inline-block;
   text-decoration: none;
-  font-size: 0.9rem;
 }
-.not-found-action--primary { background: var(--accent-blue, #0055ff); border-color: var(--accent-blue, #0055ff); }
+
+.link_404:hover {
+  color: #fff;
+  background: #2f8f28;
+  text-decoration: none;
+}
