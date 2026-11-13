@@ -22,7 +22,6 @@ import PageMeta from './components/PageMeta'
 import Breadcrumbs from './components/Breadcrumbs'
 import ContactForm from './components/ContactForm'
 import NotFound from './components/NotFound'
-import FlameCursor from './components/FlameCursor'
 import { PrivacyPolicy, TermsOfService } from './components/LegalPages'
 
 function PrivacyPage() {
@@ -109,9 +108,6 @@ function App() {
     <ToastProvider>
       <ConsentProvider>
         <Router>
-          {/* Flame cursor (global): fixed canvases, pointer-events none —
-              the flame follows the cursor on every page. */}
-          <FlameCursor />
           {/* Day 8: all framer-motion animations respect the OS
               reduced-motion setting; GSAP entrances check it directly. */}
           <MotionConfig reducedMotion="user">
