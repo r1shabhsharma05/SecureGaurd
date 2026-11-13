@@ -31,7 +31,6 @@
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  cursor: url('/cursors/apple-arrow.png') 9 4, auto;
 }
 
 body {
@@ -42,12 +41,63 @@ body {
   line-height: 1.6;
 }
 
-a, button, [role="button"] {
+/* Apple cursors (macOS-White artwork, ful1e5/apple_cursor) — see public/cursors/README.md.
+   Base arrow lives on html/body and is INHERITED, so text and clickables can
+   override it. (A `*` arrow rule kills the I-beam over plain text.) */
+html,
+body {
+  cursor: url('/cursors/apple-arrow.png') 9 4, auto;
+}
+
+/* Text: I-beam over anything you read or type in. Children inherit it. */
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+span,
+li,
+td,
+th,
+label,
+code,
+pre,
+blockquote,
+figcaption,
+address,
+dt,
+dd,
+input,
+textarea,
+[contenteditable="true"] {
+  cursor: url('/cursors/apple-text.png') 15 16, text !important;
+}
+
+/* Clickable: Apple hand. Children inherit it (e.g. a span inside a button). */
+a,
+button,
+[role="button"],
+select,
+summary,
+[onclick],
+input[type="checkbox"],
+input[type="radio"],
+input[type="submit"],
+input[type="button"],
+input[type="reset"],
+input[type="file"],
+input[type="range"],
+.cursor-pointer {
   cursor: url('/cursors/apple-hand.png') 9 6, pointer !important;
 }
 
-input, textarea {
-  cursor: url('/cursors/apple-text.png') 15 16, text !important;
+/* Text inside a clickable stays a hand (beats the span text rule above). */
+button *,
+a *,
+[role="button"] * {
+  cursor: url('/cursors/apple-hand.png') 9 6, pointer !important;
 }
 
 h1, h2, h3, h4, h5, h6 {
