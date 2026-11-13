@@ -31,7 +31,7 @@
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  cursor: url('/cursors/arrow.svg') 6 3, auto;
+  cursor: url('/cursors/apple-arrow.png') 9 4, auto;
 }
 
 body {
@@ -43,11 +43,11 @@ body {
 }
 
 a, button, [role="button"] {
-  cursor: url('/cursors/hand.svg') 11 3, pointer !important;
+  cursor: url('/cursors/apple-hand.png') 9 6, pointer !important;
 }
 
 input, textarea {
-  cursor: url('/cursors/text.svg') 12 12, text !important;
+  cursor: url('/cursors/apple-text.png') 15 16, text !important;
 }
 
 h1, h2, h3, h4, h5, h6 {
