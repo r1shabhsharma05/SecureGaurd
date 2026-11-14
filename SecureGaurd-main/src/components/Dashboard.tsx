@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield, LayoutDashboard, GitBranch, Search,
-  ChevronDown, AlertTriangle,
+  ChevronDown, LogOut, AlertTriangle,
   CheckCircle2, XCircle, Clock, Activity,
   FileCode2, Zap, Settings, Database, BarChart3,
   Play, RefreshCw, Filter, ArrowUpRight,
@@ -11,7 +11,6 @@ import {
 import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import { useToast } from './Toast';
-import LogoutButton from './LogoutButton';
 import { deleteAccount } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
 import Breadcrumbs from './Breadcrumbs';
@@ -777,9 +776,9 @@ export default function Dashboard() {
               <p className="dash-user-name">{user.firstName} {user.lastName}</p>
               <p className="dash-user-email">{user.email}</p>
             </div>
-          </div>
-          <div className="dash-logout-wrap">
-            <LogoutButton onLogout={handleLogout} />
+            <button className="dash-logout-btn" onClick={handleLogout} title="Logout" aria-label="Log out">
+              <LogOut size={15} />
+            </button>
           </div>
         </div>
       </aside>

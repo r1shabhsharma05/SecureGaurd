@@ -150,11 +150,20 @@
   text-overflow: ellipsis;
 }
 
-.dash-logout-wrap {
+.dash-logout-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
   display: flex;
+  align-items: center;
   justify-content: center;
-  margin-top: 0.75rem;
+  transition: var(--transition-smooth);
+  flex-shrink: 0;
 }
+.dash-logout-btn:hover { color: var(--accent-red); background: rgba(239,68,68,0.1); }
 
 /* ── Main ───────────────────────────────────────────────────────────────────── */
 .dash-main {

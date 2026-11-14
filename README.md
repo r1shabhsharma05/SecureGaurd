@@ -18,6 +18,12 @@
 
 ![SecureGaurd scan flow — connect a repo, scan it, apply custom rules, triage with ML, fix ranked findings](docs/scan-flow-animated.svg)
 
+## About
+
+SecureGaurd is an application-security platform built by [Rishabh Sharma](https://github.com/r1shabhsharma05). Connect a GitHub or GitLab repository, run a scan, and get a ranked list of real vulnerabilities — SAST, hardcoded secrets, IaC, API-spec and SBOM — triaged by measured ML models so teams fix what matters first, not noise.
+
+🌐 **Live app:** https://secureguard-main.vercel.app
+
 ## Overview
 
 SecureGaurd is a multi-tenant application-security platform for software teams. Connect a GitHub or GitLab repository, run a scan, and get a ranked list of real vulnerabilities — not noise.
