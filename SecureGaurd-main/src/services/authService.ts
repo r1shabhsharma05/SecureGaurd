@@ -46,6 +46,40 @@ export async function resetPassword(
   });
 }
 
+/** Re-send the email-verification link (SEC-09). Generic message by design. */
+export async function resendVerification(email: string): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>('/api/auth/resend-verification', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/**
+ * Signed-in password change (SEC-38). Server requires the current
+ * password and clears all sessions afterwards — the caller must treat a
+ * success as a logout and send the user back to login.
+ */
+export async function changePassword(
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ message: string }> {
+  const res = await fetch(apiUrl('/api/auth/change-password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    credentials: 'include',
+    body: JSON.stringify({ currentPassword, newPassword } satisfies ChangePasswordRequest),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || 'Password change failed.');
+  return data;
+}
+
 /**
  * Delete the signed-in account (Day 9). Requires the current password and
  * the typed confirmation "DELETE" — enforced server-side. Returns the

@@ -71,6 +71,9 @@ export default function NeonAuth({ mode, oauthErrorText, onModeChange, onForgot 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  // SEC-09 — resend state for a gated (unverified) email.
+  const [resending, setResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState('');
 
   // Turnstile token, tagged with the form mode that minted it: a token
   // minted for one mode must not leak into another (single-use, and the
@@ -87,7 +90,7 @@ export default function NeonAuth({ mode, oauthErrorText, onModeChange, onForgot 
 
   const location = useLocation();
   const navigate = useNavigate();
-  const { login, register, user } = useAuth();
+  const { login, register, user, pendingVerificationEmail, resendVerification } = useAuth();
 
   const lampOnRef = useRef(true);
   const colorRef = useRef('amber');
@@ -526,11 +529,19 @@ export default function NeonAuth({ mode, oauthErrorText, onModeChange, onForgot 
         // After login, user state is updated — navigation happens in the
         // redirect effect above, based on updated user state.
       } else {
-        await register(firstName, lastName, email, password, captchaToken ?? undefined);
-        setSuccess('Account created! Redirecting to setup…');
-        trackEvent('signup_completed');
-        // New users always go to onboarding
-        setTimeout(() => navigate('/onboarding'), 1000);
+        const result = await register(firstName, lastName, email, password, captchaToken ?? undefined);
+        if (result.requiresVerification) {
+          // SEC-09 — no session until the email is verified: stay here
+          // and say so, with a resend button below, instead of sending
+          // the user to onboarding with no session.
+          setSuccess('Account created! Check your email for the verification link — you can sign in once verified.');
+          trackEvent('signup_completed');
+        } else {
+          setSuccess('Account created! Redirecting to setup…');
+          trackEvent('signup_completed');
+          // New users always go to onboarding
+          setTimeout(() => navigate('/onboarding'), 1000);
+        }
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -539,6 +550,21 @@ export default function NeonAuth({ mode, oauthErrorText, onModeChange, onForgot 
       setCaptchaKey((k) => k + 1);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Resend verification email (SEC-09) ──────────────────────────────────
+  const handleResendVerification = async () => {
+    if (!pendingVerificationEmail || resending) return;
+    setResending(true);
+    setResendStatus('');
+    try {
+      await resendVerification(pendingVerificationEmail);
+      setResendStatus('Verification email sent — check your inbox.');
+    } catch (err: unknown) {
+      setResendStatus(err instanceof Error ? err.message : 'Could not resend the verification email.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -763,6 +789,14 @@ export default function NeonAuth({ mode, oauthErrorText, onModeChange, onForgot 
 
             {error && <p className="neon-form-message" role="alert">{error}</p>}
             {success && <p className="neon-form-message neon-form-message--success" role="status">{success}</p>}
+            {pendingVerificationEmail && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <button type="button" className="toggle-mode-btn" onClick={() => void handleResendVerification()} disabled={resending}>
+                  {resending ? 'Sending…' : `Resend verification email to ${pendingVerificationEmail}`}
+                </button>
+                {resendStatus && <p className="neon-form-message" role="status" style={{ marginTop: '0.4rem' }}>{resendStatus}</p>}
+              </div>
+            )}
             {!error && oauthErrorText && <p className="neon-form-message" role="alert">{oauthErrorText}</p>}
 
             <form className="auth-form" onSubmit={handleAuthSubmit} autoComplete="off">

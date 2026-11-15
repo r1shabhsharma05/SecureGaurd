@@ -312,17 +312,6 @@
   color: var(--text-dim);
   margin-bottom: 0.5rem;
 }
-.scan-progress-meta code {
-  color: var(--accent-blue);
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.75rem;
-}
-.scan-pct {
-  margin-left: auto;
-  font-weight: 600;
-  color: var(--accent-blue);
-}
-
 .scan-progress-track {
   height: 3px;
   background: var(--border-color);
@@ -335,6 +324,17 @@
   border-radius: 99px;
   transition: width 0.1s linear;
   box-shadow: 0 0 8px var(--accent-blue-glow);
+}
+/* SEC-37: indeterminate only — the server reports no progress, so the bar
+   slides instead of filling to a fabricated %. */
+.scan-progress-fill--indeterminate {
+  width: 40%;
+  transition: none;
+  animation: scanIndeterminate 1.4s ease-in-out infinite;
+}
+@keyframes scanIndeterminate {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
 }
 
 /* ── Stats ───────────────────────────────────────────────────────────────────── */
@@ -479,6 +479,7 @@
 .vuln-table-wrap {
   flex: 1;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
 .vuln-table {
@@ -765,8 +766,47 @@
   .detail-panel { display: none; }
 }
 
+/* ── Mobile nav toggle + backdrop (SEC-39) ────────────────────────────────
+   Hidden on desktop. ≤768px the sidebar is display:none, so this button
+   is the only way to reach the 10 nav items; the sidebar re-opens as a
+   fixed overlay drawer, dismissed by tapping a nav item or the backdrop. */
+.dash-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-main);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dash-nav-backdrop {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .dash-sidebar { display: none; }
+  .dash-sidebar--open {
+    display: flex;
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 900;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+  }
+  .dash-nav-toggle { display: inline-flex; }
+  .dash-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 800;
+  }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .dash-header { padding: 1rem; gap: 0.75rem; flex-wrap: wrap; }
   .dash-search { width: 160px; }
@@ -1016,6 +1056,12 @@
   padding: 2rem;
   overflow-y: auto;
   flex: 1;
+}
+
+/* Horizontal scroll wrapper for wide tables on narrow screens (SEC-39):
+   scan-history tables have 8 columns and would otherwise crush. */
+.table-scroll-x {
+  overflow-x: auto;
 }
 
 .scan-history-table {

@@ -463,6 +463,18 @@
   transition: width 0.3s ease;
 }
 
+/* Indeterminate fill: honest progress while a scan runs server-side —
+   no fake percentage (SEC-37). */
+.scan-progress-bar-fill--indeterminate {
+  width: 40%;
+  animation: scanIndeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes scanIndeterminate {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
 /* Review Results Taste Preview */
 .results-summary-cards {
   display: grid;

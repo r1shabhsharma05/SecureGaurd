@@ -104,13 +104,17 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
       let res = await fetch(apiUrl(url), { ...options, headers, credentials: 'include' });
 
       if (res.status === 401) {
-        const ok = await refreshSession();
-        if (ok) {
+        // SEC-07 — the retry must use the token refreshSession() RETURNS.
+        // The old code re-sent `accessToken` from this closure, which is
+        // the expired token state had not re-rendered yet — so the retry
+        // always failed with the same 401.
+        const freshToken = await refreshSession();
+        if (freshToken) {
           res = await fetch(apiUrl(url), {
             ...options,
             headers: {
               ...headers,
-              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+              Authorization: `Bearer ${freshToken}`,
             },
             credentials: 'include',
           });

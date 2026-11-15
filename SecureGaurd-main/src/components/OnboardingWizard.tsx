@@ -100,7 +100,6 @@ export const OnboardingWizard: React.FC = () => {
 
   // Step 3 State: Trigger Scan
   const [isScanning, setIsScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
   const [scanStatusText, setScanStatusText] = useState('Initializing Security Scanner...');
 
   // Step 4 State: Scan Results Preview
@@ -198,9 +197,17 @@ export const OnboardingWizard: React.FC = () => {
   };
 
   // ── Step 1 Action: Skip ──
+  // SEC-07 — completeOnboarding now throws on failure (it used to silently
+  // mark onboarding done locally). Stay on the wizard and show the error
+  // instead of navigating with unsaved state.
   const handleSkipOnboarding = async () => {
+    try {
+      await completeOnboarding();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not save onboarding progress. Please try again.');
+      return;
+    }
     if (storageKey) localStorage.removeItem(storageKey);
-    await completeOnboarding();
     navigate('/dashboard');
   };
 
@@ -269,24 +276,13 @@ export const OnboardingWizard: React.FC = () => {
   // ── Step 3 Actions: Start Security Scan ──
   const handleStartScan = async () => {
     setIsScanning(true);
-    setScanProgress(10);
     setError('');
 
-    // Animate scanning status messages
-    const statuses = [
-      'Extracting Abstract Syntax Trees (AST)...',
-      'Scanning for AWS Keys & Hardcoded Secrets...',
-      'Analyzing SQL Injection & XSS Taint Patterns...',
-      'Evaluating XGBoost Classifier False-Positive Probability...',
-      'Calculating CVSS Vulnerability Risk Scores...'
-    ];
-
-    let statusIdx = 0;
-    const interval = setInterval(() => {
-      statusIdx = (statusIdx + 1) % statuses.length;
-      setScanStatusText(statuses[statusIdx]);
-      setScanProgress(prev => Math.min(prev + 18, 90));
-    }, 1200);
+    // Honest progress only: the trigger runs server-side, so the UI shows
+    // an indeterminate spinner and one static status line — no fake
+    // percentage, no rotating stage names presented as live progress
+    // (SEC-37: same pattern removed from Dashboard.tsx this run).
+    setScanStatusText('Scan running…');
 
     try {
       // First get or trigger scan for the first selected repo
@@ -300,9 +296,6 @@ export const OnboardingWizard: React.FC = () => {
         accessToken,
         refreshSession
       );
-
-      clearInterval(interval);
-      setScanProgress(100);
 
       if (scanRes.ok) {
         const data = await scanRes.json();
@@ -341,7 +334,6 @@ export const OnboardingWizard: React.FC = () => {
         throw new Error('Scan execution failed');
       }
     } catch (err: unknown) {
-      clearInterval(interval);
       setIsScanning(false);
       setError(err instanceof Error ? err.message : 'Error executing scan');
     }
@@ -373,8 +365,13 @@ export const OnboardingWizard: React.FC = () => {
 
   // ── Step 5 Actions: Finish Onboarding ──
   const handleFinishOnboarding = async () => {
+    try {
+      await completeOnboarding();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not save onboarding progress. Please try again.');
+      return;
+    }
     if (storageKey) localStorage.removeItem(storageKey);
-    await completeOnboarding();
     navigate('/dashboard');
   };
 
@@ -679,7 +676,7 @@ export const OnboardingWizard: React.FC = () => {
                 <div className="scan-status-text">{scanStatusText}</div>
                 <p className="scan-subtext">Executing AST Parser, Secret Traversal &amp; XGBoost Classifier</p>
                 <div className="scan-progress-bar-bg">
-                  <div className="scan-progress-bar-fill" style={{ width: `${scanProgress}%` }}></div>
+                  <div className="scan-progress-bar-fill scan-progress-bar-fill--indeterminate"></div>
                 </div>
               </div>
             )}

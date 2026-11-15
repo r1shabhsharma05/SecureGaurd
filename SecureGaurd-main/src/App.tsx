@@ -1,4 +1,7 @@
-import { BrowserRouter as Router, Routes, Route, useNavigate, useSearchParams } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from './context/AuthContext'
+import VerifyEmailPage from './components/VerifyEmailPage'
 import { MotionConfig } from 'framer-motion'
 import './index.css'
 import Navbar from './components/Navbar'
@@ -103,6 +106,17 @@ function ResetPasswordRouteHandler() {
   return <ResetPasswordPage token={token} />;
 }
 
+// SEC-44 — /onboarding had no logged-out guard: an anonymous user could
+// open the wizard (its API calls still required auth, so this is a UX
+// hole, not a data hole). While the session restore is in flight, render
+// nothing rather than flashing the wizard or bouncing a real user.
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <ToastProvider>
@@ -121,7 +135,8 @@ function App() {
                 <Route path="/contact" element={<ContactPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/terms" element={<TermsPage />} />
-                <Route path="/onboarding" element={<OnboardingWizard />} />
+                <Route path="/onboarding" element={<RequireAuth><OnboardingWizard /></RequireAuth>} />
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
                 <Route path="/accept-invite" element={<InviteRouteHandler />} />

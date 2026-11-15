@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Shield, LayoutDashboard, GitBranch, Search,
@@ -6,12 +6,12 @@ import {
   CheckCircle2, XCircle, Clock, Activity,
   FileCode2, Zap, Settings, Database, BarChart3,
   Play, RefreshCw, Filter, ArrowUpRight,
-  Plus, X, Trash2, Globe, FileCheck, Users, CreditCard, Layers, Bell
+  Plus, X, Trash2, Globe, FileCheck, Users, CreditCard, Layers, Bell, Menu
 } from 'lucide-react';
 import { useAuth, authFetch } from '../context/AuthContext';
 import { useOrganization } from '../context/OrganizationContext';
 import { useToast } from './Toast';
-import { deleteAccount } from '../services/authService';
+import { deleteAccount, changePassword, resendVerification } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
 import Breadcrumbs from './Breadcrumbs';
 import EmptyState from './EmptyState';
@@ -146,6 +146,9 @@ export default function Dashboard() {
   
   // Navigation
   const [activeNav, setActiveNav] = useState('overview');
+  // SEC-39 — mobile nav: the sidebar is display:none ≤768px, so without
+  // this the 10 nav items are unreachable on a phone.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isOrgSettingsOpen, setIsOrgSettingsOpen] = useState(false);
   const [orgSettingsTab, setOrgSettingsTab] = useState<'members' | 'invitations' | 'audit' | 'billing' | 'settings'>('billing');
   // Day 9 — delete-account confirmation state (Settings → Danger zone).
@@ -154,6 +157,48 @@ export default function Dashboard() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
+
+  // SEC-09 / SEC-38 — change password + email verification status.
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
+  const [verificationNotice, setVerificationNotice] = useState('');
+
+  const handleChangePassword = async () => {
+    if (!accessToken) return;
+    setPasswordError('');
+    if (newPassword.length < 8) { setPasswordError('New password must be at least 8 characters.'); return; }
+    if (newPassword !== confirmPassword) { setPasswordError('New passwords do not match.'); return; }
+    if (newPassword === currentPassword) { setPasswordError('New password must be different from the current password.'); return; }
+    setChangingPassword(true);
+    try {
+      await changePassword(accessToken, currentPassword, newPassword);
+      pushToast('success', 'Password changed. Please sign in again with your new password.');
+      await logout();
+      navigate('/');
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : 'Password change failed.');
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!user?.email || resendingVerification) return;
+    setResendingVerification(true);
+    setVerificationNotice('');
+    try {
+      const data = await resendVerification(user.email);
+      setVerificationNotice(data.message);
+    } catch (err) {
+      setVerificationNotice(err instanceof Error ? err.message : 'Could not resend the verification email.');
+    } finally {
+      setResendingVerification(false);
+    }
+  };
 
   const handleDeleteAccount = async () => {
     if (!accessToken || deleteConfirmText !== 'DELETE' || !deletePassword) return;
@@ -194,8 +239,15 @@ export default function Dashboard() {
 
   // UI Control states
   const [scanning, setScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
-  const [scanFile, setScanFile] = useState('');
+  // Honest scan state (SEC-37): no fabricated % or filenames. While a scan
+  // runs we show only an indeterminate spinner plus the real status the
+  // server reports for GET /api/scans/:id.
+  const [scanStatusText, setScanStatusText] = useState('');
+  // Poll timer for the real scan record; cleared on completion and unmount.
+  const scanPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => {
+    if (scanPollRef.current) clearInterval(scanPollRef.current);
+  }, []);
   const [filterSev, setFilterSev] = useState<string>('ALL');
   const [filterType, setFilterType] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -449,45 +501,93 @@ export default function Dashboard() {
     }
   };
 
-  const SCAN_FILES = [
-    'auth/login.js', 'config/db.js', 'routes/user.js',
-    'middleware/auth.js', 'utils/upload.js', 'services/payment.js',
-    'controllers/admin.js', 'lib/crypto.js',
-  ];
-
+  // SEC-37: the old code faked progress here — a 2.4 s interval cycling
+  // random filenames from a hardcoded list and animating 0→100% BEFORE
+  // the real scan trigger fired. Removed entirely. The scan is now
+  // triggered immediately; while it runs the UI shows only an
+  // indeterminate spinner plus the real status polled from
+  // GET /api/scans/:id (same endpoint the onboarding wizard reads).
+  // POST /api/scans/trigger is synchronous today, so the first poll
+  // normally already sees the terminal status; the poll also covers a
+  // future async trigger without changing this UI.
   const triggerScan = async () => {
     if (scanning || !selectedRepo || !accessToken) return;
     setScanning(true);
-    setScanProgress(0);
-    setScanFile('');
+    setScanStatusText('Starting scan…');
 
-    let i = 0;
-    const interval = setInterval(() => {
-      i++;
-      setScanFile(SCAN_FILES[Math.floor(Math.random() * SCAN_FILES.length)]);
-      setScanProgress(Math.min(Math.round((i / 20) * 100), 100));
-      if (i >= 20) {
-        clearInterval(interval);
-        
-        (async () => {
+    const stopPolling = () => {
+      if (scanPollRef.current) {
+        clearInterval(scanPollRef.current);
+        scanPollRef.current = null;
+      }
+    };
+
+    // Poll the REAL scan record until it reaches a terminal status.
+    const pollScanStatus = (scanId: number) =>
+      new Promise<string>((resolve) => {
+        let attempts = 0;
+        scanPollRef.current = setInterval(async () => {
+          attempts += 1;
           try {
-            const res = await orgFetch('/api/scans/trigger', {
-              method: 'POST',
-              body: JSON.stringify({ repositoryId: selectedRepo.id })
-            });
+            const res = await orgFetch(`/api/scans/${scanId}`);
             if (res.ok) {
-              await fetchData();
-              trackEvent('scan_started', { repositoryId: selectedRepo.id });
+              const scan = await res.json();
+              if (scan.status === 'completed' || scan.status === 'failed') {
+                stopPolling();
+                resolve(scan.status);
+                return;
+              }
+              setScanStatusText(`Scan ${scan.status}…`);
             }
           } catch (err) {
             console.error(err);
-          } finally {
-            setScanning(false);
-            setScanProgress(100);
           }
-        })();
+          if (attempts >= 60) {
+            // ~2 min cap; the scan record stays queryable in scan history.
+            stopPolling();
+            resolve('unknown');
+          }
+        }, 2000);
+      });
+
+    try {
+      const res = await orgFetch('/api/scans/trigger', {
+        method: 'POST',
+        body: JSON.stringify({ repositoryId: selectedRepo.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // 422 carries the failed scan's id — confirm its real status.
+        if (typeof data.scanId === 'number') await pollScanStatus(data.scanId);
+        pushToast('error', data.message || 'Failed to start scan.');
+        return;
       }
-    }, 120);
+      const scanId = data.scan?.id;
+      if (typeof scanId === 'number') {
+        setScanStatusText('Scan running…');
+        const finalStatus = await pollScanStatus(scanId);
+        await fetchData();
+        if (finalStatus === 'completed') {
+          trackEvent('scan_started', { repositoryId: selectedRepo.id });
+          pushToast('success', data.message || 'Scan completed.');
+        } else if (finalStatus === 'failed') {
+          pushToast('error', 'Scan failed. See scan history for details.');
+        } else {
+          // Polling timed out; the scan may still finish server-side.
+          pushToast('success', 'Scan started — check scan history for results.');
+        }
+      } else {
+        await fetchData();
+        pushToast('success', data.message || 'Scan completed.');
+      }
+    } catch (err) {
+      console.error(err);
+      pushToast('error', 'Failed to start scan. Check your connection and try again.');
+    } finally {
+      stopPolling();
+      setScanning(false);
+      setScanStatusText('');
+    }
   };
 
   const handleUpdateVulnStatus = async (vulnId: number, status: string) => {
@@ -669,7 +769,10 @@ export default function Dashboard() {
   return (
     <div className="dash-root">
       {/* ── Sidebar ── */}
-      <aside className="dash-sidebar">
+      <aside
+        className={`dash-sidebar${mobileNavOpen ? ' dash-sidebar--open' : ''}`}
+        onClick={(e) => { if ((e.target as HTMLElement).closest('.dash-nav-item')) setMobileNavOpen(false); }}
+      >
         <div className="dash-brand">
           <Link to="/" className="dash-brand-logo">
             <Shield size={22} className="brand-shield" />
@@ -782,12 +885,23 @@ export default function Dashboard() {
           </div>
         </div>
       </aside>
+      {mobileNavOpen && (
+        <div className="dash-nav-backdrop" onClick={() => setMobileNavOpen(false)} aria-hidden="true" />
+      )}
 
       {/* ── Main ── */}
       <main className="dash-main">
         {/* Header */}
         <header className="dash-header">
           <div className="dash-header-left">
+            <button
+              className="dash-nav-toggle"
+              onClick={() => setMobileNavOpen((o) => !o)}
+              aria-label="Toggle navigation"
+              aria-expanded={mobileNavOpen}
+            >
+              <Menu size={20} />
+            </button>
             <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: navTitle }]} />
             <h1 className="dash-page-title">
               {activeNav === 'overview' && 'Security Overview'}
@@ -855,16 +969,16 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Scan Progress Bar */}
+        {/* Scan Progress Bar — indeterminate only (SEC-37). No % and no
+            filenames: the server reports no progress, so none is shown. */}
         {scanning && activeNav === 'overview' && (
-          <div className="scan-progress-bar-wrap">
+          <div className="scan-progress-bar-wrap" role="status" aria-live="polite">
             <div className="scan-progress-meta">
               <Activity size={13} className="spin-icon" />
-              <span>Scanning <code>{scanFile}</code></span>
-              <span className="scan-pct">{scanProgress}%</span>
+              <span>{scanStatusText || 'Scan running…'}</span>
             </div>
             <div className="scan-progress-track">
-              <div className="scan-progress-fill" style={{ width: `${scanProgress}%` }} />
+              <div className="scan-progress-fill scan-progress-fill--indeterminate" />
             </div>
           </div>
         )}
@@ -1349,6 +1463,7 @@ export default function Dashboard() {
                 onAction={() => setActiveNav('overview')}
               />
             ) : (
+            <div className="table-scroll-x">
             <table className="scan-history-table">
               <thead>
                 <tr>
@@ -1392,6 +1507,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            </div>
             )}
           </div>
         )}
@@ -1415,6 +1531,7 @@ export default function Dashboard() {
               </div>
             </div>
 
+            <div className="table-scroll-x">
             <table className="scan-history-table">
               <thead>
                 <tr>
@@ -1449,6 +1566,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 
@@ -1556,6 +1674,76 @@ export default function Dashboard() {
                 <div style={{gridColumn: 'span 2'}}>
                   <span style={{color: 'var(--text-dim)', display: 'block', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '2px'}}>Email Address</span>
                   <span className="highlight">{user.email}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Email verification status (SEC-09) */}
+            <div className="settings-card">
+              <h3 className="settings-section-title">Email Verification</h3>
+              <div style={{display:'flex', alignItems:'center', gap:'0.5rem', marginBottom:'0.75rem'}}>
+                <span style={{fontSize:'0.8rem', color:'var(--text-dim)'}}>Status:</span>
+                <span style={{fontSize:'0.8rem', fontWeight:700, color: user.isEmailVerified ? 'var(--accent-green)' : '#f87171'}}>
+                  {user.isEmailVerified ? '✓ Verified' : 'Not verified'}
+                </span>
+              </div>
+              {!user.isEmailVerified && (
+                <>
+                  <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
+                    Your email is not verified. Some features may be limited until you confirm it.
+                  </p>
+                  <button type="button" className="connect-repo-btn" onClick={() => void handleResendVerification()} disabled={resendingVerification}>
+                    {resendingVerification ? 'Sending…' : 'Resend verification email'}
+                  </button>
+                  {verificationNotice && <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginTop:'0.5rem'}} role="status">{verificationNotice}</p>}
+                </>
+              )}
+            </div>
+
+            {/* Change password (SEC-38) — server clears all sessions on
+                success, so this signs you out everywhere. */}
+            <div className="settings-card">
+              <h3 className="settings-section-title">Change Password</h3>
+              <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
+                Changing your password signs you out on all devices. You will need to sign in again.
+              </p>
+              {passwordError && <p style={{fontSize:'0.8rem', color:'#f87171', marginBottom:'0.5rem'}} role="alert">{passwordError}</p>}
+              <div style={{display:'flex', flexDirection:'column', gap:'0.5rem', maxWidth:'24rem'}}>
+                <input
+                  type="password"
+                  placeholder="Current password"
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  autoComplete="current-password"
+                  style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem'}}
+                />
+                <input
+                  type="password"
+                  placeholder="New password (min 8 characters)"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem'}}
+                />
+                <input
+                  type="password"
+                  placeholder="Confirm new password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem'}}
+                />
+                <div>
+                  <button
+                    type="button"
+                    className="connect-repo-btn"
+                    disabled={changingPassword || !currentPassword || !newPassword || !confirmPassword}
+                    onClick={() => void handleChangePassword()}
+                  >
+                    {changingPassword ? 'Changing…' : 'Change password'}
+                  </button>
                 </div>
               </div>
             </div>
