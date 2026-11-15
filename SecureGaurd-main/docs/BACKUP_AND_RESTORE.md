@@ -1,12 +1,31 @@
 # Database backups & restore — SecureGuard
 
-**Status, stated honestly (1 Nov 2026):** the backup *script* (`backend/scripts/backup-db.sh`)
-and the restore procedure below are written and statically verified, but **no backup has
-been taken and no trial restore has been performed** from this VM: the VM has no `pg_dump`
-and no `DATABASE_URL` (it lives only in Render env). The first real backup + trial restore
-is a ~15-minute HIS STEP below. Supabase automated backups for this project are likewise
-**not confirmed** — the project ref is not recorded anywhere in the repo, so no API check
-could identify it; confirm in the dashboard (step 1 below).
+**Project:** Supabase `wkvvxqlflhjiqkhwxrsl` (ap-southeast-1). The ref was
+not recorded anywhere in the repo until 2026-11-16 — it is now, so future
+checks can identify the project without guessing from the Render URL.
+
+**Status, stated honestly (16 Nov 2026, Day 3 Unit G re-check):** still
+**no backup has ever been taken and no trial restore has been performed.**
+Supabase automated backups / PITR remain **UNVERIFIED**: the Management
+API was checked read-only on 2026-11-16 and returned **403 Forbidden**
+for both `GET /v1/projects/wkvvxqlflhjiqkhwxrsl` and
+`GET /v1/projects/wkvvxqlflhjiqkhwxrsl/database/backups` — the connected
+token can only see the "Saftey App" org (`ivwejzjgbvvqwjtfuljd`), not this
+project, so the API cannot confirm or deny PITR. The dashboard check in
+step 1 below is still the only way to confirm it (owner step). **SEC-32
+stays FAIL** until a backup exists AND a trial restore into a disposable
+database has passed (step 3) — do not mark PASS on an unrestored backup.
+
+(Previous status, 1 Nov 2026: the backup *script*
+(`backend/scripts/backup-db.sh`) and the restore procedure below are
+written and statically verified, but **no backup has been taken and no
+trial restore has been performed** from this VM: the VM has no `pg_dump`
+and no `DATABASE_URL` (it lives only in Render env). The first real backup
++ trial restore is a ~15-minute HIS STEP below. Supabase automated backups
+for this project are likewise **not confirmed** — the project ref is not
+recorded anywhere in the repo, so no API check could identify it; confirm
+in the dashboard (step 1 below). The ref is recorded now; the rest of
+that paragraph still holds.)
 
 ## 1. Confirm Supabase automated backups (dashboard, ~3 min)
 
@@ -101,3 +120,160 @@ the production database in an unknown state with no clean rollback.
 - Secrets in Render/Vercel env vars (JWT secret, API keys): those live in
   the platforms' env stores, not the database — rotate/re-enter them
   separately if a platform account is lost.
+
+## 5. RLS apply + verification (SEC-31)
+
+Migration `backend/prisma/migrations/20261116_rls_policies/migration.sql`
+(16 policies on 13 tenant tables, `app.current_org_id` /
+`app.current_user_id` session variables, AuditLog append-only trigger) is
+written and validated offline against real PostgreSQL 17.5 (PGlite, 42/42
+checks: cross-org reads 0 rows, unset-variable reads 0 rows, same-org
+reads return rows, AuditLog UPDATE/DELETE raise, org-cascade delete still
+works, backfill correct). It is **NOT applied to production**. Apply it
+only in this order — applying it first breaks the app (every org-scoped
+query returns zero rows, by design: fail closed).
+
+### 5.1 Prerequisites (all must be true before §5.2)
+
+1. **App code deployed.** `backend/utils/rlsContext.js` is deployed AND
+   the call sites are converted to run inside `withOrgContext` /
+   `withUserContext`: org routes, `requireOrgContext` discovery,
+   org creation (`routes/organizations.js`, `utils/orgMigration.js`),
+   invitation accept (`routes/invitations.js` — resolve via
+   `app_org_id_for_invitation` first), Razorpay webhook
+   (`routes/billingWebhook.js` — resolve via
+   `app_org_id_for_razorpay_subscription` first), push webhook
+   (`routes/integration.js` — resolve via
+   `app_org_id_for_repository` / `app_user_id_for_repository` first),
+   and `createAuditLog` (must accept a `tx` and run inside the request's
+   transaction — audit writes outside a wrapped transaction are denied
+   by RLS and logged as "Audit Log Error", non-fatally). Until the call
+   sites are converted, the app issues plain `prisma.*` calls with no
+   variables set.
+2. **Least-privilege app role.** A true superuser bypasses RLS even with
+   `FORCE ROW LEVEL SECURITY`. Check what the app connects as — in the
+   SQL Editor, as the app credential:
+   ```sql
+   SELECT usesuper FROM pg_user WHERE usename = current_user;
+   ```
+   Must return `false`. If it returns `true` (the Supabase `postgres`
+   role), create a dedicated role first (run as `postgres` superuser in
+   the SQL Editor; generate the password fresh, store it in Render only,
+   never in chat or a file):
+   ```sql
+   CREATE ROLE secureguard_app LOGIN PASSWORD '<generated>';
+   GRANT CONNECT ON DATABASE postgres TO secureguard_app;
+   GRANT USAGE ON SCHEMA public TO secureguard_app;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO secureguard_app;
+   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO secureguard_app;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO secureguard_app;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+     GRANT USAGE, SELECT ON SEQUENCES TO secureguard_app;
+   ```
+   Then repoint Render `DATABASE_URL` at `secureguard_app` and redeploy.
+   Note: `prisma migrate deploy` must keep running as the owner role —
+   the app role must not own the migrations.
+3. **Backfill check.** The migration backfills `Scan` /
+   `ComplianceReport` from their `Repository` and `Sbom` from its `Scan`,
+   and reports remaining NULL-org rows as a `NOTICE`. Any `Repository`
+   row still NULL-org after the login-time migration (`orgMigration.js`)
+   stays visible only to its owning user — acceptable, but confirm the
+   count is small before applying.
+
+### 5.2 Apply (SQL Editor — the Management API cannot run SQL)
+
+1. Open the Supabase dashboard → project `wkvvxqlflhjiqkhwxrsl` → SQL
+   Editor → New query.
+2. Paste the entire contents of
+   `backend/prisma/migrations/20261116_rls_policies/migration.sql` and
+   run it. Expected output: `NOTICE: RLS migration self-check passed:
+   16 policies on 13 tables` plus a `NOTICE` line with the remaining
+   NULL-org counts. Any `ERROR` aborts the apply — fix and re-run; the
+   file is safely re-runnable (`DROP POLICY IF EXISTS`,
+   `CREATE OR REPLACE FUNCTION`, idempotent backfill).
+3. Do NOT also run `npx prisma migrate deploy` for this migration
+   afterwards unless `_prisma_migrations` already records it — applying
+   via both paths double-applies. If the migration was applied via the
+   SQL Editor, record that here with the date so a later `migrate
+   deploy` is not run blindly.
+4. Confirm: `SELECT count(*) FROM pg_policies WHERE schemaname =
+   'public';` — expect 16 on the tenant tables (plus any pre-existing
+   policies, of which there were none).
+
+### 5.3 Live cross-tenant matrix (the verification — SEC-31 stays FAIL until this passes)
+
+Use two throwaway accounts; delete both orgs and accounts afterwards.
+Never use real user data.
+
+1. Register user A, create org A, add one repository + trigger one scan.
+   Register user B, create org B, add one repository + trigger one scan.
+   Note both org ids and both user ids.
+2. As user A (frontend or API with A's token):
+   - `GET /api/repos` (or the org repo list) returns ONLY org A's repo.
+   - `GET /api/scans/<org-B-scan-id>` → 404.
+   - `GET /api/organizations/<org-B-id>` → 403.
+   - `GET /api/vulnerabilities` (or the scan's findings) returns only
+     org A's findings.
+3. As user B: mirror — only org B's rows, org A's ids → 404/403.
+4. Direct database check (SQL Editor, one script, as the app role —
+   `SET ROLE secureguard_app;` first; the SQL Editor's own `postgres`
+   session bypasses RLS and would show everything):
+   ```sql
+   BEGIN;
+   SET LOCAL app.current_org_id = '<org A id>';
+   SET LOCAL app.current_user_id = '<user A id>';
+   SELECT count(*) FROM "Repository";   -- expect: org A repos only (+ A's own NULL-org repos)
+   SELECT count(*) FROM "Subscription"; -- expect: 1 (org A's) or 0 if org A has none
+   SELECT count(*) FROM "AuditLog";     -- expect: only org A's rows
+   ROLLBACK;
+   ```
+   Repeat with org B / user B and confirm the counts swap.
+5. Append-only: as the app role with org A context,
+   `UPDATE "AuditLog" SET action='x' WHERE "organizationId" = <org A id>;`
+   must raise `AuditLog is append-only`; same for `DELETE`.
+6. Regression: log in as user A, complete onboarding, create a second
+   org, accept an invitation to org B as a new member — all three flows
+   must still work (they are the bootstrap/resolver paths).
+7. Record the date + results here. Only then may SEC-31 move to PASS.
+
+### 5.4 Rollback (if the apply breaks the app)
+
+Run as the owner role in the SQL Editor. This disables RLS but keeps
+the tables and data — the app returns to app-code-only isolation.
+
+```sql
+ALTER TABLE "Organization" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "OrganizationMembership" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "OrganizationInvitation" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "AuditLog" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "Subscription" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "AlertSetting" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "AlertLog" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "CustomRule" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "Repository" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "Scan" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "ComplianceReport" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "Sbom" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "Vulnerability" DISABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS audit_log_append_only ON "AuditLog";
+DROP FUNCTION IF EXISTS prevent_audit_log_mutation();
+DROP FUNCTION IF EXISTS app_current_org_id();
+DROP FUNCTION IF EXISTS app_current_user_id();
+DROP FUNCTION IF EXISTS app_org_has_members(integer);
+DROP FUNCTION IF EXISTS app_org_id_for_invitation(text);
+DROP FUNCTION IF EXISTS app_org_id_for_razorpay_subscription(text);
+DROP FUNCTION IF EXISTS app_org_id_for_stripe_subscription(text);
+DROP FUNCTION IF EXISTS app_org_id_for_repository(text, text);
+DROP FUNCTION IF EXISTS app_user_id_for_repository(text, text);
+```
+
+Re-enabling after a rollback is a fresh apply of §5.2 (the file is
+re-runnable), followed by the full §5.3 matrix again.
+
+## 6. Status log
+
+| Date | Event |
+|---|---|
+| 2026-11-01 | Backup script + restore procedure written, statically verified; no backup taken, no trial restore performed. |
+| 2026-11-16 | Management API re-check (read-only): project detail + backups endpoints both 403 — token scoped to "Saftey App" org only; PITR still unverified. Project ref `wkvvxqlflhjiqkhwxrsl` recorded. RLS migration written + validated offline (42/42, PGlite PG 17.5); NOT applied. Retention rules defined in `DATA_RETENTION.md`; no purge job, no purge run. |
