@@ -87,7 +87,7 @@ A comprehensive security audit of the SecureGuard backend was conducted across 8
 ## 8. Actionable Items & Acceptable MVP Risks
 
 ### ⚠️ Manual Action Items (Required by Admin):
-1. **Rotate MongoDB Credentials**: `.env` contains a dev connection string `glanexus_admin:Rish1234`. Ensure this is updated to a production database URI in deployment.
+1. **Rotate MongoDB Credentials**: `.env` contains a dev connection string `glanexus_admin:[REDACTED — password removed from this doc on 2026-11-16, Day 3 of the 20-day program; rotate the dev credential itself]`. Ensure this is updated to a production database URI in deployment.
 2. **Set `ENCRYPTION_KEY` & `WEBHOOK_SECRET`**: Add strong random 32-byte hex strings in production `.env` for PAT encryption and Webhook HMAC validation.
 
 ### 💡 Acceptable MVP Risks:
