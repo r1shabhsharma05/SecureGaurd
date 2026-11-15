@@ -7,6 +7,7 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
+const { z, zPassword, validateBody } = require('../utils/validation');
 const { planAccountDeletion } = require('../utils/accountDeletion');
 const { cancelOrgProviderSubscription } = require('./organizations');
 const {
@@ -54,6 +55,51 @@ const accountDeleteLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// SEC-17 — session endpoints had no limiter. /refresh and /me are called
+// far more often than login (every tab restore, every 401 retry), so the
+// caps are generous: they stop hammering, not normal use.
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { message: 'Too many session refresh attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const meLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { message: 'Too many session checks, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// SEC-09 — resending a verification email is a token-minting endpoint:
+// 5/hour, same budget as password reset.
+const verifyLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { message: 'Too many verification email requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// SEC-09 — grandfathering rule (no migration, no lockout): an account is
+// "verification pending" only when it has an outstanding verification
+// token. Accounts created before this gate shipped have
+// emailVerifyToken = NULL (register only sets it at creation; verifying
+// nulls it), so they pass the gate untouched. Accounts created after the
+// gate get a token at register and are gated until they verify. A legacy
+// account that asks for a resend gets a token and is gated from then on —
+// it opted into verification.
+function isVerificationPending(user) {
+  return !user.isEmailVerified && user.emailVerifyToken != null;
+}
+
+function verificationError() {
+  return { status: 403, code: 'email_not_verified', message: 'Please verify your email address before signing in. Check your inbox for the verification link, or request a new one.' };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function generateAccessToken(userId) {
@@ -108,6 +154,15 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(400).json({ message: 'User already exists' });
 
+    // SEC-09 — verification is a real gate now, so registration without a
+    // working mailer would mint an account nobody can ever verify (a
+    // lockout, not a signup). Fail honestly BEFORE creating the account,
+    // the same precedent as forgot-password's 503. Deploy precondition:
+    // BREVO_API_KEY (or SMTP_HOST) must be set on the backend host.
+    if (!isMailConfigured()) {
+      return res.status(503).json({ message: 'Email verification is not configured on the server, so a new account cannot be verified. Please contact support.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 12);
     const emailVerifyToken = crypto.randomBytes(32).toString('hex');
     // Store only the SHA-256 hash of the verification token (a DB read
@@ -119,34 +174,27 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
       data: { firstName, lastName, email, password: hashedPassword, emailVerifyToken: hashToken(emailVerifyToken), emailVerifyTokenExpiresAt: emailVerifyExpiry },
     });
 
-    const accessToken  = generateAccessToken(newUser.id);
-    const refreshToken = generateRefreshToken(newUser.id);
-
-    // Store hashed refresh token in DB
-    const hashedRefresh = await bcrypt.hash(refreshToken, 10);
-    await prisma.user.update({ where: { id: newUser.id }, data: { refreshToken: hashedRefresh } });
-
-    setRefreshCookie(res, refreshToken);
-
-    // Best-effort verification email: registration must not fail when SMTP
-    // is unconfigured or down — the token stays stored for /verify-email.
-    if (isMailConfigured()) {
-      const verifyUrl = `${req.protocol}://${req.get('host') || 'localhost'}/api/auth/verify-email?token=${emailVerifyToken}`;
-      try {
-        await sendMail({
-          to: email,
-          subject: 'Verify your SecureGuard email',
-          text: `Welcome to SecureGuard. Verify your email address: ${verifyUrl}`,
-          html: `<p>Welcome to SecureGuard.</p><p><a href="${verifyUrl}">Verify your email address</a></p>`,
-        });
-      } catch (mailErr) {
-        console.error('Failed to send verification email:', mailErr);
-      }
+    // SEC-09 — no session until the email is verified. The verification
+    // link lands on the frontend page, which POSTs the token back.
+    const verifyUrl = `${frontendBaseUrl()}/verify-email?token=${emailVerifyToken}`;
+    try {
+      await sendMail({
+        to: email,
+        subject: 'Verify your SecureGuard email',
+        text: `Welcome to SecureGuard. Verify your email address: ${verifyUrl}`,
+        html: `<p>Welcome to SecureGuard.</p><p><a href="${verifyUrl}">Verify your email address</a></p>`,
+      });
+    } catch (mailErr) {
+      console.error('Failed to send verification email:', mailErr);
+      // No orphaned unverifiable account: the signup did not complete.
+      try { await prisma.user.delete({ where: { id: newUser.id } }); } catch { /* already gone */ }
+      return res.status(503).json({ message: 'Verification email could not be delivered. Please try again later.' });
     }
 
     res.status(201).json({
-      accessToken,
-      user: { id: newUser.id, firstName, lastName, email, isEmailVerified: false, onboardingCompleted: false },
+      message: 'Account created. Please verify your email address before signing in.',
+      email: newUser.email,
+      requiresVerification: true,
     });
   } catch (err) {
     console.error(err);
@@ -186,6 +234,46 @@ async function verifyEmailHandler(req, res) {
 router.get('/verify-email', verifyEmailHandler);
 router.post('/verify-email', verifyEmailHandler);
 
+// ── POST /api/auth/resend-verification ───────────────────────────────────────
+// Rotates the verification token (24 h expiry) and re-sends the email.
+// Anti-enumeration: unknown emails and already-verified accounts get the
+// same generic 200 as a real resend. Mail-unconfigured is an honest 503,
+// same precedent as forgot-password.
+router.post('/resend-verification', verifyLimiter, async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (user && !user.isEmailVerified) {
+      if (!isMailConfigured()) {
+        return res.status(503).json({ message: 'Verification email is not configured on the server, so a verification link cannot be sent. Please contact support.' });
+      }
+      const emailVerifyToken = crypto.randomBytes(32).toString('hex');
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { emailVerifyToken: hashToken(emailVerifyToken), emailVerifyTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+      });
+      const verifyUrl = `${frontendBaseUrl()}/verify-email?token=${emailVerifyToken}`;
+      try {
+        await sendMail({
+          to: email,
+          subject: 'Verify your SecureGuard email',
+          text: `Verify your SecureGuard email address: ${verifyUrl}`,
+          html: `<p><a href="${verifyUrl}">Verify your email address</a></p>`,
+        });
+      } catch (mailErr) {
+        console.error('Failed to send verification email:', mailErr);
+        return res.status(503).json({ message: 'Verification email could not be delivered. Please try again later.' });
+      }
+    }
+    res.json({ message: 'If that email belongs to an unverified account, a verification link has been sent.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 router.post('/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
@@ -197,6 +285,15 @@ router.post('/login', authLimiter, async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
+
+    // SEC-09 — unverified accounts (created after the gate shipped) get
+    // no session. Legacy accounts without a pending token are grandfathered
+    // — see isVerificationPending. The `code` lets the frontend offer a
+    // resend instead of a dead end.
+    if (isVerificationPending(user)) {
+      const err = verificationError();
+      return res.status(err.status).json({ code: err.code, message: err.message, email: user.email });
+    }
 
     const accessToken  = generateAccessToken(user.id);
     const refreshToken = generateRefreshToken(user.id);
@@ -256,7 +353,7 @@ async function rotateRefreshToken(userId, verifiedCurrentHash, res) {
   return generateAccessToken(userId);
 }
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   const token = req.cookies?.sg_refresh;
   if (!token) return res.status(401).json({ message: 'No refresh token' });
 
@@ -274,6 +371,14 @@ router.post('/refresh', async (req, res) => {
     if (!user || !user.refreshToken) {
       clearRefreshCookie(res);
       return res.status(401).json({ message: 'Session expired, please login again' });
+    }
+
+    // SEC-09 — a pending-verification account must not keep a session
+    // alive through refresh (no tokens are issued to it anymore, but a
+    // pre-gate session must not survive the gate either).
+    if (isVerificationPending(user)) {
+      clearRefreshCookie(res);
+      return res.status(401).json({ code: 'email_not_verified', message: 'Please verify your email address before signing in.' });
     }
 
     // Path 1: token matches the current hash → rotate.
@@ -421,9 +526,48 @@ router.post('/reset-password', resetLimiter, async (req, res) => {
   }
 });
 
+// ── POST /api/auth/change-password ──────────────────────────────────────────
+// Signed-in password change (SEC-38: Dashboard Settings promised it in
+// copy but no endpoint or UI existed). Requires the current password — a
+// stolen session token alone must not change it — and clears all sessions
+// afterwards, same as reset-password. Validated with Unit C's shared lib;
+// currentPassword is a plain non-empty string (not zPassword: legacy
+// passwords were created without a length cap, and a cap here would lock
+// out a user whose existing password exceeds it).
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required.'),
+  newPassword: zPassword,
+});
+router.post('/change-password', authLimiter, authMiddleware, validateBody(changePasswordSchema), async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (newPassword === currentPassword) return res.status(400).json({ message: 'New password must be different from the current password' });
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user) return res.status(404).json({ message: 'Account not found' });
+    if (!(await bcrypt.compare(currentPassword, user.password))) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: await bcrypt.hash(newPassword, 12),
+        refreshToken: null,
+        previousRefreshToken: null,
+        refreshGraceExpiresAt: null,
+      },
+    });
+    clearRefreshCookie(res);
+    res.json({ message: 'Password changed successfully. Please sign in again with your new password.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 // Used by frontend to restore session from refresh cookie on page load
-router.get('/me', async (req, res) => {
+router.get('/me', meLimiter, async (req, res) => {
   const token = req.cookies?.sg_refresh;
   if (!token) return res.status(401).json({ message: 'Not authenticated' });
 
@@ -431,6 +575,10 @@ router.get('/me', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
     const user = await prisma.user.findUnique({ where: { id: decoded.id } });
     if (!user || !user.refreshToken) return res.status(401).json({ message: 'Session expired' });
+
+    // SEC-09 — same gate as /refresh: no session restore for a
+    // pending-verification account.
+    if (isVerificationPending(user)) return res.status(401).json({ code: 'email_not_verified', message: 'Please verify your email address before signing in.' });
 
     // Accept the current token, or a superseded token inside its rotation
     // grace window (a concurrent /refresh may have just rotated it).

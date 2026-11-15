@@ -27,8 +27,17 @@ async function requireOrgContext(req, res, next) {
   try {
     let membership = null;
 
-    if (requestedOrgId && !isNaN(parseInt(requestedOrgId))) {
-      const orgIdNum = parseInt(requestedOrgId);
+    // A supplied org id must be a plain integer. The old
+    // `!isNaN(parseInt(...))` gate coerced "12abc" to 12 and then silently
+    // fell back to the caller's first org when the lookup missed, so a
+    // malformed id could return another org's data. Malformed ids are a
+    // 400; only an absent id takes the default-org path below.
+    if (requestedOrgId) {
+      const rawOrgId = String(requestedOrgId).trim();
+      if (!/^\d+$/.test(rawOrgId)) {
+        return res.status(400).json({ message: 'Invalid organization id' });
+      }
+      const orgIdNum = parseInt(rawOrgId, 10);
       membership = await prisma.organizationMembership.findUnique({
         where: {
           userId_organizationId: {

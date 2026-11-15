@@ -26,3 +26,6 @@ __pycache__/
 *.sln
 *.sw?
 .vercel
+
+# OSV scan output (SEC-13) — generated, do not commit
+osv-scan-results.json

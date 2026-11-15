@@ -51,7 +51,24 @@ app.set('trust proxy', Number.isNaN(trustProxyHops) ? 1 : trustProxyHops);
 // JSON API; crossOriginResourcePolicy is relaxed to "cross-origin" so the
 // separately-hosted frontend can consume API responses (incl. generated
 // reports) without CORP blocking — CORS above remains the access gate.
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+// CSP (SEC-19, Day 6): this API serves no HTML at all, so the policy is
+// default-deny — nothing may load, frame, or base itself on an API
+// response. The SPA's own (different, wider) CSP lives in vercel.json,
+// which is what browsers actually enforce on the frontend origin.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: {
+    // useDefaults: false — helmet otherwise merges its defaults in
+    // (script-src 'self', style-src 'unsafe-inline', …); this API serves
+    // no HTML, so the policy is exactly these three directives.
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+    },
+  },
+}));
 app.use(cors({
   origin: (origin, callback) => {
     if (isAllowedOrigin(origin)) {

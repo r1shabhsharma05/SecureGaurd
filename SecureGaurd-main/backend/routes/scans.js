@@ -14,6 +14,7 @@ const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
 const { scanAPISpecFile } = require('../utils/apiSpecScanner');
+const { validateBody, validateQuery, scanTriggerSchema, zPagination } = require('../utils/validation');
 
 // ─── ML feature: file change frequency from git history ─────────────────────
 // The FP classifier was trained with file_change_frequency in 0..50
@@ -44,7 +45,7 @@ function getFileChangeFrequency(scanRoot, relFilePath, cache) {
 // Two caller kinds: the classifier service (shared CLASSIFIER_API_KEY header,
 // operator-level export) and an authenticated user, whose export is scoped to
 // the organizations they belong to — never other tenants' labeled findings.
-router.get('/export-feedback', async (req, res, next) => {
+router.get('/export-feedback', validateQuery(zPagination), async (req, res, next) => {
   const apiKey = req.headers['x-secureguard-key'];
   if (process.env.CLASSIFIER_API_KEY && apiKey === process.env.CLASSIFIER_API_KEY) {
     req.serviceKeyCaller = true;
@@ -66,10 +67,8 @@ router.get('/export-feedback', async (req, res, next) => {
     }
     // Unbounded export: cap the rows returned (default 1000, max 5000)
     // so one export cannot dump the whole labeled-findings table.
-    const requestedLimit = parseInt(req.query.limit, 10);
-    const take = Number.isFinite(requestedLimit)
-      ? Math.min(Math.max(requestedLimit, 1), 5000)
-      : 1000;
+    // validateQuery(zPagination) already parsed/clamped ?limit=.
+    const take = req.query.limit;
     const vulns = await prisma.vulnerability.findMany({
       where,
       select: {
@@ -164,9 +163,10 @@ const scanTriggerLimiter = rateLimit({
 
 // POST /api/scans/trigger — trigger a real SAST/Secret scan for an organization repo
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
-router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(scanTriggerSchema), async (req, res) => {
+  // validateBody(scanTriggerSchema) already proved repositoryId a positive
+  // integer; it arrives here as a number, never "12abc".
   const { repositoryId } = req.body;
-  if (!repositoryId || isNaN(parseInt(repositoryId))) return res.status(400).json({ message: 'Valid repositoryId is required' });
 
   let scanTarget = null;
   try {

@@ -16,6 +16,7 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
+const { validateBody, contactSchema } = require('../utils/validation');
 const { parseSummaryRange, buildAnalyticsSummary } = require('../utils/analyticsSummary');
 const {
   isAllowedAnalyticsEvent,
@@ -84,7 +85,7 @@ router.post('/analytics/events', analyticsLimiter, async (req, res) => {
   }
 });
 
-router.post('/contact', contactLimiter, requireTurnstile(), async (req, res) => {
+router.post('/contact', contactLimiter, requireTurnstile(), validateBody(contactSchema), async (req, res) => {
   const checked = validateContactInput(req.body || {});
   // Honeypot filled: answer success without sending or storing anything, so
   // a bot cannot tell it was caught — and no fake "message received" row

@@ -204,10 +204,20 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       try {
         const payload = { findings: sastFindings.map(f => f.mlFeatures) };
         const CLASSIFIER_URL = process.env.FP_CLASSIFIER_URL || "http://localhost:8001";
-        
+        // T11: the manual scan path (routes/scans.js) sends
+        // X-SecureGuard-Key; this webhook path did not, so the classifier
+        // rejected the call and FP suppression silently never ran on
+        // webhook-triggered scans. Same header, same fail-closed rule:
+        // without the key the classifier refuses and findings stay REAL.
+        // The key itself is never logged.
+        const headers = { 'Content-Type': 'application/json' };
+        if (process.env.CLASSIFIER_API_KEY) {
+          headers['X-SecureGuard-Key'] = process.env.CLASSIFIER_API_KEY;
+        }
+
         const response = await fetch(`${CLASSIFIER_URL}/classify/batch`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(payload)
         });
 

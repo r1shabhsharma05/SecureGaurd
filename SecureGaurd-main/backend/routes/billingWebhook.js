@@ -130,29 +130,36 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     : null;
 
   // 2. Idempotency: Razorpay sends a unique event id per delivery.
+  // The check lives INSIDE the transaction below (T10): the pre-check
+  // used to sit outside it, so two concurrent duplicates could both pass
+  // it and the loser 500'd on the unique constraint. The atomic claim is
+  // now the insert of the event row itself — razorpayEventId is @unique,
+  // so the first writer wins and a P2002 means "already processed".
   const eventId =
     req.headers['x-razorpay-event-id'] ||
     `${eventType}:${subEntity?.id || ''}:${payEntity?.id || ''}`;
 
-  const existingEvent = await prisma.razorpayWebhookEvent.findUnique({
-    where: { razorpayEventId: eventId }
-  });
-
-  if (existingEvent) {
-    console.log(`[Razorpay Webhook] Duplicate event ${eventId} ignored.`);
-    return res.status(200).json({ received: true, idempotent: true });
-  }
-
   // 3. Process Event inside a Transaction (event row first, so a failure
   // rolls everything back and Razorpay's retry can re-deliver cleanly).
+  let duplicate = false;
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.razorpayWebhookEvent.create({
-        data: {
-          razorpayEventId: eventId,
-          eventType
+      try {
+        await tx.razorpayWebhookEvent.create({
+          data: {
+            razorpayEventId: eventId,
+            eventType
+          }
+        });
+      } catch (err) {
+        if (err.code === 'P2002') {
+          // Another delivery already claimed this event id — ack it as a
+          // duplicate instead of 500ing (Razorpay retries 500s).
+          duplicate = true;
+          return;
         }
-      });
+        throw err;
+      }
 
       // Ordering guard, inside the same transaction: ignore an event
       // older than (or equal to) the last applied event for this
@@ -299,6 +306,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           break;
       }
     });
+
+    if (duplicate) {
+      console.log(`[Razorpay Webhook] Duplicate event ${eventId} ignored.`);
+      return res.status(200).json({ received: true, idempotent: true });
+    }
 
     return res.status(200).json({ received: true });
   } catch (err) {
