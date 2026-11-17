@@ -6,8 +6,14 @@
  * audit logs for sensitive operations.
  */
 
-const prisma = require('../prismaClient');
 const { ensureDefaultOrganization } = require('../utils/orgMigration');
+// SEC-31: tenant-table reads must run inside an RLS transaction context.
+// requireOrgContext discovers the org by user id only, so its lookups run
+// inside withUserContext (the OrganizationMembership policy lets a
+// user-only session see its OWN memberships). createAuditLog writes
+// AuditLog, which needs the org variable — it opens its own
+// withOrgContext unless the caller passes a tx it already runs in.
+const { withUserContext, withOrgContext } = require('../utils/rlsContext');
 
 /**
  * Require valid Organization Membership and set req.organizationId & req.orgRole
@@ -38,26 +44,30 @@ async function requireOrgContext(req, res, next) {
         return res.status(400).json({ message: 'Invalid organization id' });
       }
       const orgIdNum = parseInt(rawOrgId, 10);
-      membership = await prisma.organizationMembership.findUnique({
-        where: {
-          userId_organizationId: {
-            userId: req.userId,
-            organizationId: orgIdNum,
-          }
-        },
-        include: { organization: true }
-      });
+      // User-only context: the caller proves membership by user id; the
+      // policy's user disjunct makes exactly this row visible.
+      membership = await withUserContext(req.userId, (tx) =>
+        tx.organizationMembership.findUnique({
+          where: {
+            userId_organizationId: {
+              userId: req.userId,
+              organizationId: orgIdNum,
+            }
+          },
+          include: { organization: true }
+        }));
 
       if (!membership) {
         return res.status(403).json({ message: 'Access denied: You are not a member of this organization' });
       }
     } else {
       // Find default or first membership for user
-      membership = await prisma.organizationMembership.findFirst({
-        where: { userId: req.userId },
-        include: { organization: true },
-        orderBy: { createdAt: 'asc' }
-      });
+      membership = await withUserContext(req.userId, (tx) =>
+        tx.organizationMembership.findFirst({
+          where: { userId: req.userId },
+          include: { organization: true },
+          orderBy: { createdAt: 'asc' }
+        }));
 
       // Auto-migrate if no membership exists yet
       if (!membership) {
@@ -65,15 +75,16 @@ async function requireOrgContext(req, res, next) {
         if (!defaultOrg) {
           return res.status(400).json({ message: 'No valid organization context found' });
         }
-        membership = await prisma.organizationMembership.findUnique({
-          where: {
-            userId_organizationId: {
-              userId: req.userId,
-              organizationId: defaultOrg.id,
-            }
-          },
-          include: { organization: true }
-        });
+        membership = await withUserContext(req.userId, (tx) =>
+          tx.organizationMembership.findUnique({
+            where: {
+              userId_organizationId: {
+                userId: req.userId,
+                organizationId: defaultOrg.id,
+              }
+            },
+            include: { organization: true }
+          }));
       }
     }
 
@@ -111,19 +122,34 @@ function requireOrgRole(allowedRoles = []) {
 
 /**
  * Log Audit Event
+ *
+ * SEC-31: AuditLog is RLS-protected (org match only), so the insert must
+ * run with the org variable set. Pass `tx` when the caller already runs
+ * inside a withOrgContext/withUserContext transaction (the write then
+ * reuses that transaction's context); otherwise this opens its own
+ * short withOrgContext. A missing actorId cannot satisfy the context
+ * helpers — the row is skipped with a loud log instead of failing the
+ * caller's request (no call site passes a null actor today).
  */
-async function createAuditLog(organizationId, actorId, action, targetType = null, targetId = null, details = null) {
+async function createAuditLog(organizationId, actorId, action, targetType = null, targetId = null, details = null, tx = null) {
+  const row = {
+    organizationId: parseInt(organizationId),
+    actorId: actorId ? parseInt(actorId) : null,
+    action: String(action),
+    targetType: targetType ? String(targetType) : null,
+    targetId: targetId ? String(targetId) : null,
+    details: details || {},
+  };
   try {
-    await prisma.auditLog.create({
-      data: {
-        organizationId: parseInt(organizationId),
-        actorId: actorId ? parseInt(actorId) : null,
-        action: String(action),
-        targetType: targetType ? String(targetType) : null,
-        targetId: targetId ? String(targetId) : null,
-        details: details || {},
-      }
-    });
+    if (tx) {
+      await tx.auditLog.create({ data: row });
+      return;
+    }
+    if (row.actorId === null || Number.isNaN(row.actorId)) {
+      console.error('Audit Log Error: refusing audit write without actorId (no RLS context can be set)', { organizationId, action });
+      return;
+    }
+    await withOrgContext(row.organizationId, row.actorId, (t) => t.auditLog.create({ data: row }));
   } catch (err) {
     console.error('Audit Log Error:', err);
   }

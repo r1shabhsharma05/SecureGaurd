@@ -9,21 +9,32 @@ const assert = require('node:assert/strict');
 const prismaPath = require.resolve('../prismaClient');
 const orgMigrationPath = require.resolve('../utils/orgMigration');
 
-const calls = { findUnique: [], findFirst: [] };
+const calls = { findUnique: [], findFirst: [], auditCreate: [], transactions: 0 };
 let findUniqueImpl = async () => null;
 let findFirstImpl = async () => null;
 let ensureDefaultOrgImpl = async () => null;
 
+// SEC-31: requireOrgContext now runs its lookups inside withUserContext,
+// which opens a prisma.$transaction and sets the RLS user variable via
+// tx.$executeRaw (SET LOCAL) before the query. The stub mirrors that
+// boundary so the tests still run with no DB: $transaction hands the
+// callback a tx client whose model methods record the same calls.
+const txStub = {
+  organizationMembership: {
+    findUnique: async (args) => { calls.findUnique.push(args); return findUniqueImpl(args); },
+    findFirst: async (args) => { calls.findFirst.push(args); return findFirstImpl(args); },
+  },
+  auditLog: { create: async (args) => { calls.auditCreate.push(args); return {}; } },
+  $executeRaw: async () => {},
+  $queryRaw: async () => [],
+};
 require.cache[prismaPath] = {
   id: prismaPath,
   filename: prismaPath,
   loaded: true,
   exports: {
-    organizationMembership: {
-      findUnique: async (args) => { calls.findUnique.push(args); return findUniqueImpl(args); },
-      findFirst: async (args) => { calls.findFirst.push(args); return findFirstImpl(args); },
-    },
-    auditLog: { create: async () => ({}) },
+    ...txStub,
+    $transaction: async (fn) => { calls.transactions++; return fn(txStub); },
   },
 };
 require.cache[orgMigrationPath] = {
@@ -35,7 +46,7 @@ require.cache[orgMigrationPath] = {
   },
 };
 
-const { requireOrgContext, requireOrgRole } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 
 const MEMBER = {
   organizationId: 12,
@@ -46,6 +57,8 @@ const MEMBER = {
 function reset() {
   calls.findUnique.length = 0;
   calls.findFirst.length = 0;
+  calls.auditCreate.length = 0;
+  calls.transactions = 0;
   findUniqueImpl = async () => null;
   findFirstImpl = async () => null;
   ensureDefaultOrgImpl = async () => null;
@@ -167,4 +180,31 @@ test('requireOrgRole blocks a role outside the allowlist', () => {
   requireOrgRole(['OWNER', 'ADMIN'])({ orgRole: 'AUDITOR' }, res, () => { nextCalled = true; });
   assert.equal(statusCode, 403);
   assert.equal(nextCalled, false);
+});
+
+test('createAuditLog without tx opens its own withOrgContext transaction', async () => {
+  reset();
+  await createAuditLog(12, 7, 'REPO_ADDED', 'REPOSITORY', '5', { name: 'x' });
+  assert.equal(calls.transactions, 1, 'one transaction opened for the audit write');
+  assert.equal(calls.auditCreate.length, 1);
+  assert.equal(calls.auditCreate[0].data.organizationId, 12);
+  assert.equal(calls.auditCreate[0].data.actorId, 7);
+  assert.equal(calls.auditCreate[0].data.action, 'REPO_ADDED');
+});
+
+test('createAuditLog with tx reuses the caller transaction, opens none', async () => {
+  reset();
+  let usedTx = null;
+  const tx = { auditLog: { create: async (args) => { usedTx = args; return {}; } } };
+  await createAuditLog(12, 7, 'REPO_ADDED', 'REPOSITORY', '5', {}, tx);
+  assert.equal(calls.transactions, 0, 'no new transaction when tx is passed');
+  assert.equal(usedTx.data.organizationId, 12);
+  assert.equal(calls.auditCreate.length, 0);
+});
+
+test('createAuditLog without actorId skips the write (no RLS context can be set)', async () => {
+  reset();
+  await createAuditLog(12, null, 'REPO_ADDED');
+  assert.equal(calls.transactions, 0);
+  assert.equal(calls.auditCreate.length, 0);
 });

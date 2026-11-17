@@ -7,6 +7,13 @@
  */
 
 const prisma = require('../prismaClient');
+// SEC-31: the membership/org lookups and the creation transaction must run
+// with RLS context set. Pre-checks use withUserContext (user-only: the
+// membership policy's user disjunct + the org bootstrap carve-out). The
+// creation transaction sets the user variable first (bootstrap INSERT
+// needs org unset + user set), then the org variable to the NEW org id
+// before the OWNER membership / backfills / audit row — see rlsContext.js.
+const { withUserContext, setUserContext, setOrgContext } = require('./rlsContext');
 
 function slugify(text) {
   return text
@@ -22,37 +29,48 @@ async function ensureDefaultOrganization(userId) {
   if (!userId) return null;
 
   // Check if user already has an organization membership
-  const existingMembership = await prisma.organizationMembership.findFirst({
-    where: { userId },
-    include: { organization: true }
-  });
+  const existingMembership = await withUserContext(userId, (tx) =>
+    tx.organizationMembership.findFirst({
+      where: { userId },
+      include: { organization: true }
+    }));
 
   if (existingMembership) {
     return existingMembership.organization;
   }
 
-  // Retrieve user details to form organization name
+  // Retrieve user details to form organization name (User has no RLS)
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return null;
 
   const baseName = `${user.firstName}'s Workspace`;
   let slug = `${slugify(user.firstName)}-${user.id}`;
-  
-  // Ensure unique slug
+
+  // Ensure unique slug. Best-effort under RLS: with user-only context the
+  // lookup sees the user's own orgs + memberless orgs, so a slug owned by
+  // another org is invisible and the create below may still hit P2002
+  // (slug carries the user id, so a collision is near-impossible).
   let suffix = 0;
-  while (await prisma.organization.findUnique({ where: { slug } })) {
+  while (await withUserContext(userId, (tx) => tx.organization.findUnique({ where: { slug } }))) {
     suffix++;
     slug = `${slugify(user.firstName)}-${user.id}-${suffix}`;
   }
 
   // Create organization and link existing resources atomically in a transaction
   return await prisma.$transaction(async (tx) => {
+    // Bootstrap: org variable UNSET + user variable SET is the only state
+    // the Organization INSERT policy allows.
+    await setUserContext(tx, userId);
     const org = await tx.organization.create({
       data: {
         name: baseName,
         slug: slug,
       }
     });
+
+    // Now the org exists: set the org variable before anything that
+    // needs org context (membership, backfills, audit).
+    await setOrgContext(tx, org.id, user.id);
 
     // Create OWNER membership
     await tx.organizationMembership.create({
