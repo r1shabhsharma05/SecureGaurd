@@ -267,6 +267,17 @@ below).
   `completeOnboarding` throws on failure instead of completing locally
   (commit `670755d`). `/onboarding` is now behind the RequireAuth guard
   (SEC-44, commit `25561d9`).
+  **Day 5 (2026-11-18):** re-verified the token lifecycle, RBAC and
+  IDOR claims in code (see `docs/AUTH_AND_AUTHORIZATION.md`) — no gaps
+  found in the sampled routes. One real bug fixed: auth routes did not
+  normalize email addresses, so `Rishabh@Example.com` at register and
+  `rishabh@example.com` at login were different accounts;
+  `normalizeEmail()` + `findUserByEmail()` (canonical-first,
+  case-insensitive fallback) now applied to register, login,
+  forgot-password, resend-verification and the OAuth callback, with 4
+  new offline tests (31/31 pass incl. existing suites). Stays PARTIAL:
+  no MFA, no per-account lockout (IP rate limit only), live flows
+  still unrun (mailbox blocker).
 - **Reviewer notes:** the auth core is unusually careful for a solo project;
   the gaps are verification and MFA, not the token machinery.
 
@@ -455,6 +466,11 @@ below).
   verified accounts + two orgs, and verification needs a mailbox to click
   the link — no mailbox is available from this VM (using the user's own
   email for a probe account was NOT done without his word).
+  **Day 5 (2026-11-18):** re-verified in code — every `:id` lookup
+  sampled (scans, vulnerabilities, repos, sboms, compliance, custom
+  rules) scopes by `organizationId`, 404 on cross-org ids; no unscoped
+  fetch found. Live matrix still BLOCKED on the same mailbox
+  blocker; procedure in `docs/AUTH_AND_AUTHORIZATION.md` §4.
 - **Remaining risk:** medium until S3 is fixed (Day 5) and the live matrix
   passes (Day 7 gate). S3 fix is done; the live matrix is the remaining
   step.
@@ -485,6 +501,9 @@ below).
   missing /alerts + /custom-rules routers, Razorpay billing, 13 new
   routes). Live cross-tenant matrix still outstanding — same blocker as
   SEC-15 (needs two verified accounts; no mailbox from this VM).
+  **Day 5 (2026-11-18):** router mounts + per-router middleware counts
+  re-checked, sensitive routes spot-checked (no holes found); full
+  92-route re-count is a Day 7 gate item. Live matrix still BLOCKED.
 - **Remaining risk:** medium. One unprotected route added since Oct 24
   would be a live hole. Code-level re-verification is now done; the live
   matrix is the remaining step.
@@ -1190,6 +1209,11 @@ below).
    `requireOrgContext` fallback fix (SEC-15) — **DONE**; route-auth
    matrix re-verification (SEC-16) — **DONE (code-level; live matrix
    open)**; `orgFetch`/`completeOnboarding` fixes (SEC-07) — **DONE**.
+   **Day 5 run (2026-11-18):** claims re-verified in code, no holes in
+   sampled routes; email case-sensitivity bug fixed
+   (`normalizeEmail`/`findUserByEmail`, 4 new tests, 31/31 offline
+   pass); `docs/AUTH_AND_AUTHORIZATION.md` written. Live cross-tenant
+   matrix still BLOCKED (mailbox); SEC-07/15/16 stay PARTIAL.
 3. Day 6: CSP header (SEC-19) — **DONE, live-verified**; rate-limit
    `/refresh` + `/me` (SEC-17) — **DONE in code; live 429 proof open**;
    Razorpay idempotency inside the transaction (threat T10) — **DONE**;

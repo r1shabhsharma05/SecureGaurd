@@ -117,6 +117,23 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+// Day 5 — email addresses are case-insensitive in practice and users
+// paste them with stray spaces, but Postgres `=` on text is exact, so
+// `Rishabh@Example.com` at register and `rishabh@example.com` at login
+// were two different accounts (or a failed login). Storage and lookups
+// use the trimmed lowercase form. The fallback is a case-insensitive
+// match, so accounts created before this change (stored mixed-case) keep
+// working whatever case the user types now.
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.trim().toLowerCase() : email;
+}
+
+async function findUserByEmail(email) {
+  const normalized = normalizeEmail(email);
+  return (await prisma.user.findUnique({ where: { email: normalized } }))
+      || (await prisma.user.findFirst({ where: { email: { equals: normalized, mode: 'insensitive' } } }));
+}
+
 function setRefreshCookie(res, token) {
   res.cookie('sg_refresh', token, {
     httpOnly: true,
@@ -150,8 +167,11 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
   if (password.length < 8)
     return res.status(400).json({ message: 'Password must be at least 8 characters' });
 
+  // Day 5 — store the canonical address; see normalizeEmail above.
+  const cleanEmail = normalizeEmail(email);
+
   try {
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await findUserByEmail(email);
     if (existing) return res.status(400).json({ message: 'User already exists' });
 
     // SEC-09 — verification is a real gate now, so registration without a
@@ -171,7 +191,7 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
     const emailVerifyExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const newUser = await prisma.user.create({
-      data: { firstName, lastName, email, password: hashedPassword, emailVerifyToken: hashToken(emailVerifyToken), emailVerifyTokenExpiresAt: emailVerifyExpiry },
+      data: { firstName, lastName, email: cleanEmail, password: hashedPassword, emailVerifyToken: hashToken(emailVerifyToken), emailVerifyTokenExpiresAt: emailVerifyExpiry },
     });
 
     // SEC-09 — no session until the email is verified. The verification
@@ -179,7 +199,7 @@ router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
     const verifyUrl = `${frontendBaseUrl()}/verify-email?token=${emailVerifyToken}`;
     try {
       await sendMail({
-        to: email,
+        to: cleanEmail,
         subject: 'Verify your SecureGuard email',
         text: `Welcome to SecureGuard. Verify your email address: ${verifyUrl}`,
         html: `<p>Welcome to SecureGuard.</p><p><a href="${verifyUrl}">Verify your email address</a></p>`,
@@ -244,7 +264,7 @@ router.post('/resend-verification', verifyLimiter, async (req, res) => {
   if (!email) return res.status(400).json({ message: 'Email is required' });
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await findUserByEmail(email);
     if (user && !user.isEmailVerified) {
       if (!isMailConfigured()) {
         return res.status(503).json({ message: 'Verification email is not configured on the server, so a verification link cannot be sent. Please contact support.' });
@@ -257,7 +277,7 @@ router.post('/resend-verification', verifyLimiter, async (req, res) => {
       const verifyUrl = `${frontendBaseUrl()}/verify-email?token=${emailVerifyToken}`;
       try {
         await sendMail({
-          to: email,
+          to: user.email,
           subject: 'Verify your SecureGuard email',
           text: `Verify your SecureGuard email address: ${verifyUrl}`,
           html: `<p><a href="${verifyUrl}">Verify your email address</a></p>`,
@@ -280,7 +300,7 @@ router.post('/login', authLimiter, async (req, res) => {
   if (!email || !password) return res.status(400).json({ message: 'All fields are required' });
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await findUserByEmail(email);
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -440,7 +460,7 @@ router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, re
   if (!email) return res.status(400).json({ message: 'Email is required' });
 
   try {
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await findUserByEmail(email);
 
     if (user) {
       const resetToken  = crypto.randomBytes(32).toString('hex');
@@ -462,7 +482,7 @@ router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, re
       const resetUrl = `${frontendBaseUrl()}/reset-password?token=${resetToken}`;
       try {
         await sendMail({
-          to: email,
+          to: user.email,
           subject: 'Reset your SecureGuard password',
           text: `Reset your SecureGuard password (link expires in 1 hour): ${resetUrl}\nOr enter this token in the app: ${resetToken}`,
           html: `<p>Reset your SecureGuard password (link expires in 1 hour):</p><p><a href="${resetUrl}">Reset password</a></p>`,
@@ -700,7 +720,11 @@ router.get('/oauth/:provider/callback', oauthCallbackLimiter, async (req, res) =
     const idField = cfg.idField;
     let user = await prisma.user.findFirst({ where: { [idField]: normalized.providerId } });
     if (!user) {
-      const byEmail = await prisma.user.findUnique({ where: { email: normalized.email } });
+      // Day 5 — provider emails go through the same canonical form as
+      // password accounts, so an OAuth login never strands or duplicates
+      // a mixed-case address.
+      const oauthEmail = normalizeEmail(normalized.email);
+      const byEmail = await prisma.user.findUnique({ where: { email: oauthEmail } });
       if (byEmail && byEmail[idField] && byEmail[idField] !== normalized.providerId) {
         return fail('account_link_conflict');
       }
@@ -716,7 +740,7 @@ router.get('/oauth/:provider/callback', oauthCallbackLimiter, async (req, res) =
           data: {
             firstName: normalized.firstName,
             lastName: normalized.lastName,
-            email: normalized.email,
+            email: oauthEmail,
             password: unusable,
             isEmailVerified: true,
             onboardingCompleted: false,
