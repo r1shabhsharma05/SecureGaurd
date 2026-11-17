@@ -107,7 +107,14 @@ secrets — neither is a regression); OSV re-scan **15 → 3 findings**.
   Major bump needs the parent upgrades — Day 9 work.
 - **glob@13.0.6 — MODERATE** — "Glob: AbortSignal cancellation bypass
   allows post-timeout filesystem traversal", fixed in **14.0.2**
-  (major). Parent: `@sentry/bundler-plugins`. Day 9 work.
+  (major). Parent: `@sentry/bundler-plugins` (backend). Major bump —
+  Day 9 work.
+
+**Gate-pass re-scan (2026-11-18 ~02:47 IST, after the RLS conversion):**
+`scripts/osv-scan.mjs` re-run — 568 packages, same 3 findings, no new
+vulnerabilities. `@electric-sql/pglite@0.4.3` was added as a backend
+devDependency (migration validation test) and introduces no findings.
+Raw JSON: `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/osv-scan-results-2026-11-18-gate.json`.
 
 ## Findings (2026-11-17 baseline — superseded by the 18 Nov scan above)
 

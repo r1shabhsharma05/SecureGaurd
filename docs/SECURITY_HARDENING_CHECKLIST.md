@@ -54,6 +54,12 @@ real gate now), SEC-37 (fake scan progress removed), SEC-19 (CSP live on
 both hosts). SEC-06 moved FAIL → PARTIAL (mongoose removed; file deletions
 outstanding). SEC-13 moved BLOCKED → PARTIAL (measured: 15 findings,
 3 HIGH; fixes not applied, CI workflow still to be pushed via browser).
+**Gate pass (2026-11-18):** counts UNCHANGED — 24 PASS / 15 PARTIAL /
+4 FAIL / 0 BLOCKED / 3 N/A. Within-item progress: SEC-13's 3 HIGHs fixed
+(commit `9aa4ce5`, OSV re-scan 3 findings), SEC-31 call-site conversion
+done (commits `a72de3d` / `1d7aa1f` / `f13a2ce`), SEC-33 purge script
+landed — but no item crossed to PASS: all 4 FAILs still need owner
+actions (see `docs/SECURITY_GATE_REPORT.md`).
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -153,6 +159,14 @@ below).
   executed** — destructive rewrite needs his word. Caveat: the 2026-11-08
   JWT rotation is assertion-only — no repo record proves the production
   value actually changed.
+  **Gate pass (2026-11-18):** forks check DONE — GitHub API
+  `/repos/r1shabhsharma05/SecureGaurd/forks` returns `[]`, `forks_count:
+  0`. Precondition (a) cleared. Still open: (b) owner confirms the
+  current Render `JWT_SECRET` differs from the committed value, and his
+  word for the rewrite. No purge prep dir exists yet — prepare it from
+  the `~/workspace/tmp-work/safelife-purge` pattern before the rewrite;
+  do NOT execute a rewrite / force-push without his explicit
+  confirmation.
 
 ### SEC-04 — Protect JWT signing secrets / database credentials
 - **Status:** PARTIAL
@@ -174,6 +188,10 @@ below).
   plaintext PATs. Live run BLOCKED — no DB credentials on this VM; exact
   run procedure + least-privilege DB check procedure documented in the
   run report. Least-privilege DB credentials still UNVERIFIED.
+  **Gate pass (2026-11-18):** self-test re-run — **7/7 pass**
+  (`node scripts/migrate-plaintext-pats.js --self-test`). Live run still
+  BLOCKED (no DB creds, no `ENCRYPTION_KEY` on this VM); the dry-run
+  fails at startup on the missing key, as designed.
 - **Reviewer notes:** Day 4 checks the Supabase credential scope; Day 5+
   migrates legacy plaintext PATs.
   **Day 4 (2026-11-17):** Supabase scope check NOT done — no Supabase
@@ -237,6 +255,11 @@ below).
   list for the browser web-UI push (the GitHub App API cannot delete).
   Deleting the stale model copy still needs his approval per the standing
   rule.
+  **Gate pass (2026-11-18):** re-verified via GitHub API —
+  `SecureGaurd-main/backend/generated/prisma/` is STILL in the repo
+  (contents: `prisma`), and the stale `classifier model/files/` copy is
+  still there. Both deletions still need the browser web-UI push; the
+  model copy additionally needs his approval. Unchanged.
 
 ---
 
@@ -278,6 +301,12 @@ below).
   new offline tests (31/31 pass incl. existing suites). Stays PARTIAL:
   no MFA, no per-account lockout (IP rate limit only), live flows
   still unrun (mailbox blocker).
+  **Gate pass (2026-11-18):** MFA check — `grep -rni totp|mfa|authenticator|2fa`
+  over `backend/` returns 0 hits: no MFA/TOTP/2FA code exists anywhere.
+  OAuth providers exist in code (Google, GitHub, GitLab in
+  `utils/oauth.js`, auth-code + PKCE + HMAC state) but none is live
+  (`docs/OAUTH_SSO.md` — file lives under `SecureGaurd-main/docs/`).
+  Stays PARTIAL.
 - **Reviewer notes:** the auth core is unusually careful for a solo project;
   the gaps are verification and MFA, not the token machinery.
 
@@ -417,6 +446,17 @@ below).
   (commit `6324afb`); **second run (44006630822): root job fully green**
   (artifact `npm-audit-root` uploaded), backend job still red on the
   audit gate as designed. Remediation is Day 9. Stays PARTIAL.
+  **Gate pass (2026-11-18):** all 3 HIGHs FIXED — body-parser 2.3.0→
+  2.4.0, deepmerge-ts 7.1.5→8.0.2 (via @prisma/config 7.10.1), mysql2
+  3.15.3→3.24.4 (commit `9aa4ce5`; OSV 15 findings → 3). Re-scan after
+  the RLS work: 568 packages, same 3 findings — 1 HIGH picomatch@4.0.7
+  (GHSA-fc5q-39xc-vjpf, NO fixed version exists; build-time only via
+  vite) + 2 MODERATE majors (minimatch 11.0.1, glob 14.0.2 — Day 9).
+  CI workflow `.github/workflows/dependency-scan.yml` verified LIVE via
+  GitHub API (present alongside `secret-scan.yml`) — the browser push
+  from 17 Nov morning worked; no re-push needed. Stays PARTIAL until the
+  owner risk-accepts picomatch in writing (with expiry) or upstream
+  ships 4.0.8.
 
 ---
 
@@ -471,6 +511,12 @@ below).
   rules) scopes by `organizationId`, 404 on cross-org ids; no unscoped
   fetch found. Live matrix still BLOCKED on the same mailbox
   blocker; procedure in `docs/AUTH_AND_AUTHORIZATION.md` §4.
+  **Gate pass (2026-11-18):** code-level isolation now enforced by the
+  RLS conversion (commits `a72de3d` / `1d7aa1f` / `f13a2ce`) — every
+  tenant-table access runs inside an `rlsContext` (PGlite test 12/12:
+  cross-org reads 0 rows, unset vars 0 rows); `scripts/check-rls-coverage.js`
+  passes (54 files, 0 bare `prisma.<tenant-table>` accesses). Live
+  cross-tenant matrix still BLOCKED (mailbox).
 - **Remaining risk:** medium until S3 is fixed (Day 5) and the live matrix
   passes (Day 7 gate). S3 fix is done; the live matrix is the remaining
   step.
@@ -504,6 +550,10 @@ below).
   **Day 5 (2026-11-18):** router mounts + per-router middleware counts
   re-checked, sensitive routes spot-checked (no holes found); full
   92-route re-count is a Day 7 gate item. Live matrix still BLOCKED.
+  **Gate pass (2026-11-18):** full re-count DONE — 90 `router.METHOD`
+  definitions (42 GET, 33 POST, 7 PATCH, 7 DELETE, 1 PUT) + 2
+  server-level (`GET /health`, `GET /api/_test-error`) = **92, no
+  holes**. Live matrix still BLOCKED (mailbox).
 - **Remaining risk:** medium. One unprotected route added since Oct 24
   would be a live hole. Code-level re-verification is now done; the live
   matrix is the remaining step.
@@ -538,6 +588,9 @@ below).
   not a limiter failure: the VM's egress IP rotates per request and the
   limiters key on `req.ip` (same confound as the SafeLife 6.1 probes).
   Live 429 proof needs a stable IP or Render logs.
+  **Gate pass (2026-11-18):** Render API is unreachable from this VM
+  (401, no token/service ID on the VM) — no logs, no live 429 proof.
+  Stays PARTIAL as a probe limitation, not a limiter failure.
 - **Remaining risk:** low, but the two gaps are real and cheap to close.
   Gaps closed in code; live trigger proof outstanding.
 - **Reviewer notes:** fix Day 6.
@@ -567,6 +620,16 @@ below).
   with `Object.defineProperty` shadowing + a real-Express-5 regression
   test. Validation tests **11/11 pass** (live check: `/t` → 200,
   `/t?limit=abc` → 400).
+  **Gate pass (2026-11-18):** measured the full gap — of the 48
+  mutating routes, only 3 use the shared `validateBody` (auth
+  change-password, scan trigger, public contact; the export-feedback
+  GET uses `validateQuery`). **45 mutating routes have NO shared
+  validation** and rely on inline checks: ai.js 3, alerts.js 2, auth.js
+  10, billing.js 2, billingWebhook.js 1, compliance.js 2, customRules.js
+  5, integration.js 3, invitations.js 1, ml.js 1, organizations.js 9,
+  public.js 1, repos.js 2, scans.js 1 (api-spec), vulnerabilities.js 2.
+  No route is unvalidated; the gap is consistency, not absence. Wiring
+  all 45 is Day 8+ refactor work, not a silent gate-pass change.
 - **Remaining risk:** medium. Validation is ad-hoc per route; a missed
   check on a new route is a live bug. Standardise on Day 6. The shared
   library now exists and is wired into the highest-risk routes (contact,
@@ -640,6 +703,8 @@ below).
 - **Status:** PARTIAL — merged into SEC-18 (same evidence, same gap).
   Fix-all run: shared zod library exists + 3 routes wired (see SEC-18);
   remaining routes still ad-hoc.
+  **Gate pass (2026-11-18):** measured — 45 of 48 mutating routes lack
+  the shared validator (see SEC-18). Same verdict, exact count now.
 - **Sources:** screenshot 03 ("sanitize forms" overlaps screenshot 06
   "form validation" — the frontend half is SEC-34).
 - **Reviewer notes:** kept as a pointer so the screenshot-03 item is not
@@ -806,6 +871,25 @@ below).
   NOT pushed to main** — Render's pre-deploy `prisma migrate deploy`
   would auto-apply it on the next deploy, and with no call-site
   conversion every org-scoped query would return zero rows.
+  **Gate pass (2026-11-18) — rollout step (1) DONE in code:**
+  call-site conversion complete — commits `a72de3d` (rbac + org
+  migration), `1d7aa1f` (billing, alerts, repos, invitations), `f13a2ce`
+  (scans, integration, billingWebhook, organizations, auth, ml, billing,
+  sboms, ai, vulnerabilities, compliance, customRules, alerts).
+  `backend/scripts/check-rls-coverage.js` passes (54 files, 0 bare
+  `prisma.<tenant-table>` accesses); new PGlite migration test
+  `backend/tests/rlsMigration.test.js` 12/12 (16 policies / 13 tables,
+  cross-org 0 rows, fail-closed, bootstrap INSERT, append-only AuditLog).
+  Full offline suite 77 tests, 75 pass (2 known environmental failures).
+  Migration file deliberately STILL NOT pushed (Render pre-deploy would
+  auto-apply). Steps (2)–(5) outstanding: superuser check + backfill +
+  SQL Editor apply + live matrix. **Leftovers (documented, need
+  decisions):** the scans export-feedback operator path now 503s under
+  RLS (no service-role path — needs a design decision); the public
+  analytics summary's Scan/Vulnerability counts need a context when
+  called from `routes/public.js`; `routes/public.js` (AnalyticsEvent /
+  ContactMessage, no RLS) and `routes/classifier.js` (0 tenant sites)
+  verified as needing no change.
 - **Reviewer notes:** implement Postgres RLS on Day 7, with the live
   cross-tenant matrix as the verification. The app connects with a single
   `DATABASE_URL` credential — RLS design must account for that (either a
@@ -826,6 +910,12 @@ below).
   `docs/BACKUP_AND_RESTORE.md` updated with the true status + a
   restore-test procedure (cannot run from here — no `pg_dump`, no
   `DATABASE_URL`).
+  **Gate pass (2026-11-18):** re-probed — Supabase Management API
+  unauthenticated → 401; with the connected token → 403 (token sees
+  only the "Saftey App" org). PITR status STILL UNVERIFIED. Backup
+  script `backend/scripts/backup-db.sh` exists; it needs `pg_dump` +
+  production `DATABASE_URL` (Render env only). No backup ever taken, no
+  trial restore performed. Still FAIL.
 - **Remaining risk:** high. A destructive bug, a bad migration, or a
   Supabase incident is unrecoverable. This is a Day 7 production blocker.
 - **Reviewer notes:** Day 7 must take a backup AND restore-test it into a
@@ -847,6 +937,19 @@ below).
   (AuditLog 365d, AnalyticsEvent 90d, etc.; no purge job exists yet).
   AuditLog append-only trigger is in the RLS migration (PGlite-verified)
   — not applied yet (SEC-31).
+  **Gate pass (2026-11-18):** `backend/scripts/purge-retention.js`
+  landed (dry-run default, `--apply` deletes; 4/4 offline tests) —
+  covers ONLY the no-RLS tables (AnalyticsEvent 90d, ContactMessage 2y,
+  Stripe/Razorpay webhook events + WebhookDelivery 90d). The RLS tables
+  (AlertLog 180d, OrganizationInvitation EXPIRED/REVOKED + 30d) and
+  AuditLog still need the owner-role SQL in `docs/DATA_RETENTION.md`
+  §3. **Open conflict:** the §3 AuditLog DELETE will FAIL once the RLS
+  migration is applied — the append-only trigger blocks direct DELETE
+  while the org exists, for every role including superuser. Needs a
+  decision: amend the trigger with a retention carve-out, or accept
+  indefinite AuditLog retention. No scheduled job exists (no in-process
+  scheduler in this backend — monthly Render Cron Job); no purge has
+  ever run. Stays PARTIAL.
 - **Test evidence:** `backend/tests/verify_db_schema.js` exists (needs live
   DB; not run).
 - **Remaining risk:** medium — carried by SEC-31/SEC-32.
@@ -888,6 +991,11 @@ below).
   bundle (`assets/index-Ac2tFl7a.js`) contains no Turnstile site key and
   zero references to `challenges.cloudflare.com`; the token is attached
   only when present. Captcha is off on both ends — FAIL re-confirmed.
+  **Gate pass (2026-11-18) — LIVE re-probe:** `POST /api/auth/register`
+  (no token) → **201** `{ requiresVerification: true }`;
+  forgot-password → 200; contact → **201** (new ContactMessage row id
+  5). Live bundle still has 0 Turnstile references. Still FAIL — keys
+  unset, guard still fail-open by design.
 - **Remaining risk:** medium — no bot protection on signup, password reset
   or contact until the key is set.
 - **Reviewer notes:** fix = Rishabh creates the Turnstile widget in
@@ -966,6 +1074,9 @@ below).
   Settings card added; verification + resend UI added (NeonAuth +
   Dashboard Settings + `VerifyEmailPage.tsx`) — commits `670755d` /
   `25561d9`. No shared FRONTEND validation schema yet.
+  **Gate pass (2026-11-18):** grep over `src/` — zero `zod` imports:
+  no shared frontend schema exists; validation is per-form inline
+  (`required` / `pattern` / `minLength` / `maxLength`). Stays PARTIAL.
 - **Test evidence:** code inspection; no frontend tests (Day 18).
 - **Remaining risk:** low. Server-side validation is the real control and
   exists where it matters most (contact, scan trigger, auth).
@@ -991,6 +1102,9 @@ below).
 - **Remaining risk:** low. A layout bug on a phone is a UX defect, not a
   security hole. The AUTHENTICATED dashboard was NOT measured (needs a
   login) — that check is still open.
+  **Gate pass (2026-11-18):** authenticated dashboard still NOT
+  measured — measuring it needs a logged-in session on a real phone
+  (his device). No change; stays PARTIAL.
 - **Reviewer notes:** real-device check is Day 14/18.
 
 ### SEC-40 — Custom 404 page

@@ -6,6 +6,18 @@ purge has ever run. Until the purge job lands, retention is enforced by the
 manual SQL in §3, run monthly by the owner. Do not report retention as
 enforced until a purge run is recorded in §4.
 
+**Day 7 (2026-11-18, gate pass):** `backend/scripts/purge-retention.js`
+landed (dry-run default, `--apply` deletes; 4/4 offline tests pass) — it
+covers ONLY the no-RLS tables (AnalyticsEvent, ContactMessage, webhook
+events). The RLS tables (AlertLog, OrganizationInvitation) and AuditLog
+still need the owner-role SQL in §3. **Open conflict, needs a decision:**
+the §3 `AuditLog` DELETE will FAIL once migration `20261116_rls_policies`
+is applied — the append-only trigger (§6) blocks direct DELETE while the
+org exists, for every role including superuser. Either amend the trigger
+with a retention carve-out (delete rows older than 365 days after
+cold-archive export) or accept indefinite AuditLog retention. Do not run
+the §3 AuditLog DELETE after the migration lands without that decision.
+
 Related: `BACKUP_AND_RESTORE.md` (backups are the other half of retention —
 a row deleted from the live database still exists in backup archives until
 they age out, §2 below) and migration `20261116_rls_policies` (AuditLog
