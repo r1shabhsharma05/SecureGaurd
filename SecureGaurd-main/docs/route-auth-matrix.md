@@ -2,6 +2,16 @@
 
 Re-audited 2026-11-16 (Day 3, 20-Day Transformation program; SEC-16).
 Verified commit: `6d28ae4` — "add day 3 threat model and security checklist".
+**Correction 2026-11-18 (gate pass, HEAD `9aef3bb`):** the header totals
+below were wrong — they read 63/7/1/21, but the table itself sums to
+60/10/1/21 (the 3 AUTH-only integration token/repo routes had been
+counted as AUTH+ORG in the header). `GET /api/auth/me` was also listed
+as PUBLIC-DELIBERATE; it is AUTH (it validates the `sg_refresh` cookie
+JWT, 401 without it — see `auth.js:598`). Corrected split:
+**60 / 11 / 1 / 20**. Line-number references in the Evidence cells were
+verified at `6d28ae4` and are STALE after the RLS conversion
+(`a72de3d` / `1d7aa1f` / `f13a2ce`); classifications and counts are
+current at `9aef3bb`, a full line-number refresh is still owed.
 CAUTION: other Day-5 units are editing route files in this same clone
 concurrently (auth.js gained `resend-verification` + `change-password`
 and `refreshLimiter`/`meLimiter`; scans.js/public.js gained shared
@@ -30,7 +40,7 @@ Legend — Auth column: `—` = no auth middleware. Org column: `✓` = membersh
   router routes; a recount caught 2 more in `auth.js`
   (`resend-verification`, `change-password`) that landed from another
   unit's concurrent edit — both verified and classified below.
-- **AUTH+ORG: 63 · AUTH: 7 · SVC-or-JWT: 1 · PUBLIC-DELIBERATE: 21.**
+- **AUTH+ORG: 60 · AUTH: 11 · SVC-or-JWT: 1 · PUBLIC-DELIBERATE: 20.**
 - **Holes found: none.** Every route that touches tenant data requires JWT
   and org membership, or a named compensating control (below). No route
   was found missing auth that should have it, so no route fix was needed.
@@ -66,7 +76,6 @@ Legend — Auth column: `—` = no auth middleware. Org column: `✓` = membersh
 | `POST /api/auth/logout` | `backend/routes/auth.js:422` | Cookie session invalidation (no data returned) |
 | `POST /api/auth/forgot-password` | `backend/routes/auth.js:437` | Rate-limited (5/h); honest 503 when mail unconfigured; always-200 when configured (no email enumeration) |
 | `POST /api/auth/reset-password` | `backend/routes/auth.js:491` | Single-use 64-hex token + 1 h expiry; clears password + all sessions |
-| `GET /api/auth/me` | `backend/routes/auth.js:566` | Rate-limited (meLimiter — T9 gap closed in the Day-5 working tree). Session restore: validates the refresh cookie against the DB hash (current or in-grace previous). Read-only — does NOT rotate, so concurrent tab restores can't invalidate each other; SEC-09 gate applies (pending-verification → 401 `email_not_verified`) |
 | `GET /api/auth/oauth/providers` | `backend/routes/auth.js:633` | Returns only the list of configured provider names — no user data, no secrets |
 | `GET /api/auth/oauth/:provider` | `backend/routes/auth.js:638` | OAuth start: 404 unknown provider, 501 if unconfigured; HMAC-signed state + PKCE cookies set, 302 to the provider |
 | `GET /api/auth/oauth/:provider/callback` | `backend/routes/auth.js:666` | Rate-limited (30/h); state-cookie match + HMAC state verify + PKCE verifier required; provider errors logged, never shown |
@@ -85,6 +94,7 @@ Legend — Auth column: `—` = no auth middleware. Org column: `✓` = membersh
 | `POST /complete-onboarding` | JWT | — | any authenticated | `auth.js:738` — sets own `onboardingCompleted` only |
 | `POST /change-password` | JWT | — | any authenticated | `auth.js:535` — rate-limited; requires current password (a stolen session alone must not change it); bcrypt(12); clears all sessions + refresh cookie afterwards |
 | `DELETE /account` | JWT | — | any authenticated | `auth.js:776` — rate-limited (3/h); requires current password + typed `DELETE`; org-asset handoff per `utils/accountDeletion.js` |
+| `GET /me` | JWT (refresh cookie) | — | any authenticated | `auth.js:598` — validates the `sg_refresh` cookie JWT against `JWT_REFRESH_SECRET` + DB hash, 401 without it; rate-limited (meLimiter); read-only, does NOT rotate; SEC-09 gate applies (pending-verification → 401 `email_not_verified`). Moved here from the public table 2026-11-18 — it was misclassified as PUBLIC-DELIBERATE. |
 
 ### /api/repos — `router.use(auth, requireOrgContext)` (`repos.js:20-21`)
 | Method + path | Roles | Evidence |
