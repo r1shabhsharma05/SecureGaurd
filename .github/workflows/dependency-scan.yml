@@ -47,5 +47,5 @@ jobs:
         if: always()
         with:
           name: npm-audit-${{ matrix.dir == '.' && 'root' || 'backend' }}
-          path: SecureGaurd-main/${{ matrix.dir }}/npm-audit.json
+          path: ${{ matrix.dir == '.' && 'SecureGaurd-main/npm-audit.json' || 'SecureGaurd-main/backend/npm-audit.json' }}
           retention-days: 30
