@@ -397,6 +397,15 @@ below).
   via browser web-UI today (App API 403s on `.github/workflows/`);
   `scripts/osv-scan.mjs` pushed with the docs via the API. First CI run
   pending the push — see `docs/SECRETS_AND_INFRASTRUCTURE.md` §4.
+  **Day 4 first run (2026-11-17, run 44005648268): FAILURE, informative.**
+  Backend job: audit gate tripped as designed — npm audit 12 vulns
+  (7 moderate, 5 high: body-parser, deepmerge-ts, mysql2). Root job:
+  audit step passed, but the artifact upload failed on the path
+  `SecureGaurd-main/./npm-audit.json` — workflow bug, one-line fix
+  (conditional path) pushed via browser web-UI the same morning
+  (commit `6324afb`); **second run (44006630822): root job fully green**
+  (artifact `npm-audit-root` uploaded), backend job still red on the
+  audit gate as designed. Remediation is Day 9. Stays PARTIAL.
 
 ---
 

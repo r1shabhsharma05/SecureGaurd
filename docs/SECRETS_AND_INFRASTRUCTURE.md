@@ -142,11 +142,30 @@ secrets are necessarily set.
 - CI: `.github/workflows/dependency-scan.yml` (npm audit, fails on
   high/critical, push + weekly + dispatch) was written by the fix-all
   run but **could not be pushed via the GitHub App API** (403 on
-  `git/trees` — the App cannot write `.github/workflows/`). It is
-  pushed today via the browser web-UI; its first run is the Day 4
-  GitHub-Actions evidence. The script it documents as the local
-  fallback (`scripts/osv-scan.mjs`) is pushed with the docs via the
-  API in the same change.
+  `git/trees` — the App cannot write `.github/workflows/`). It was
+  pushed 2026-11-17 via the browser web-UI (commit `5dc349f`,
+  file blob matches the local copy byte-for-byte).
+- **First CI run (2026-11-17 ~02:18 IST, run 44005648268, 41 s):
+  conclusion FAILURE — and the failure is informative, not a broken
+  pipeline.** Backend job: the audit gate tripped as designed — npm
+  audit reports 12 vulnerabilities (7 moderate, 5 high), including
+  high-severity body-parser, deepmerge-ts (via prisma) and mysql2;
+  artifact `npm-audit-backend` (2.4 KB) uploaded. (npm audit counts
+  differ from the OSV count above — different advisory data; the
+  overlapping HIGHs are the same packages.) Root job: the audit step
+  PASSED (no high/critical in the root package), but the upload-artifact
+  step failed on the path `SecureGaurd-main/./npm-audit.json`
+  (upload-artifact rejects `.` path segments) — a workflow bug, not a
+  vulnerability. Fix (one-line conditional path, commit `6324afb`)
+  applied via the browser web-UI the same morning.
+- **Second CI run (2026-11-17 ~02:57 IST, run 44006630822, 51 s):
+  root job fully green** (audit passed, artifact `npm-audit-root`
+  799 B uploaded — the path error is gone); **backend job still red
+  on the audit gate as designed** (real highs; artifact
+  `npm-audit-backend` 2.4 KB uploaded). Overall conclusion failure
+  only because of the backend gate. Evidence: browser-verified
+  Actions UI; the public API re-check was rate-limited (403), so run
+  detail rests on the UI report. Remediation of the 3 HIGHs is Day 9.
 
 ## 5. Live probes (2026-11-17 ~01:0x IST)
 
