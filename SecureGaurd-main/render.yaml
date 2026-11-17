@@ -29,3 +29,37 @@ services:
         sync: false
       - key: CLASSIFIER_API_KEY
         sync: false
+      # Optional integrations — declared here (names only, values stay in
+      # the Render dashboard) so the blueprint documents the full
+      # production inventory from backend/.env.example. Day 4: previously
+      # missing, so a blueprint re-sync would not have listed them.
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: FP_CLASSIFIER_URL
+        sync: false
+      - key: GEMINI_WEB2API_URL
+        sync: false
+      - key: GEMINI_WEB2API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITLAB_CLIENT_ID
+        sync: false
+      - key: GITLAB_CLIENT_SECRET
+        sync: false
+      - key: BACKEND_URL
+        sync: false

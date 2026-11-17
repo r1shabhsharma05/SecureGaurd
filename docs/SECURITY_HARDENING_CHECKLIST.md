@@ -8,6 +8,11 @@ PARTIAL / BLOCKED item fixed. Code pushed in 3 batches (heads `670755d`,
 reflect the post-fix-all state. The RLS migration was deliberately NOT
 pushed (Render's pre-deploy `prisma migrate deploy` would auto-apply it
 before call-site conversion — see SEC-31).
+**Day 4 update:** 2026-11-17 — no status changes. Day 4 notes added to
+SEC-02/03/04/05/13/26/34/42 (gitleaks full-history scan, OSV re-scan,
+render.yaml blueprint fix, live probes); detail in
+`docs/SECRETS_AND_INFRASTRUCTURE.md`. Verified commit for the Day 4
+evidence: `8ebfe75d`.
 **Repo:** `r1shabhsharma05/SecureGaurd` — app root `SecureGaurd-main/`
 **Sources:** the seven reference screenshots supplied by Rishabh on 2026-11-13
 (transcribed in `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/REFERENCE_SCREENSHOTS.md`).
@@ -92,9 +97,18 @@ below).
   `DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY`,
   `WEBHOOK_SECRET`, `GEMINI_API_KEY`, `CLASSIFIER_API_KEY`. Example files
   document the full 32-name backend inventory and 4 frontend names.
+  **Day 4 (2026-11-17):** `render.yaml` declared only 10 vars — the 14
+  optional integration vars were missing from the blueprint. Fixed:
+  `TURNSTILE_SECRET_KEY`, `SENTRY_DSN`, `BREVO_API_KEY`, `EMAIL_FROM`,
+  `CONTACT_EMAIL`, `FP_CLASSIFIER_URL`, `GEMINI_WEB2API_URL/KEY`,
+  `GOOGLE/GITHUB/GITLAB_CLIENT_ID/SECRET`, `BACKEND_URL` added as
+  `sync: false` (names only); 24 vars total. YAML validated; see
+  `docs/SECRETS_AND_INFRASTRUCTURE.md` §3.
 - **Test evidence:** `backend/tests/deployment_config.test.js` exists but is
   env-gated — it fails at import without real secrets (expected behaviour,
-  not a code failure). Not run this run.
+  not a code failure). **Day 4:** run with dummy required vars —
+  **3/3 pass**. Backend offline suite 51/52 (the 1 failure is the
+  compliance DB test, which needs a live Postgres — environmental).
 - **Remaining risk:** whether the optional keys (`TURNSTILE_SECRET_KEY`,
   `SENTRY_DSN`, OAuth provider credentials, `GEMINI_API_KEY`,
   `BREVO_API_KEY`/SMTP) are actually set in production Render/Vercel env is
@@ -116,6 +130,14 @@ below).
   `*.env` and `backend/.env`.
 - **Test evidence:** Day 1 secret-pattern grep over HEAD found no real
   secret values in the current tree (only test fixtures and UI placeholders).
+  **Day 4 (2026-11-17):** gitleaks 8.28.0 full-history scan — 182 commits,
+  ~93.35 MB, **6 findings, 0 real secrets** (1 false-positive identifier,
+  1 doc placeholder `sg-internal-…-change-me` ×3, 2 intentional scanner-test
+  fixtures). Raw report kept out of the repo. **Detection gap:** the same
+  default rules did NOT flag the known real `JWT_SECRET` + `MONGO_URI` in
+  `e1e3dc9` — a green gitleaks run (local or CI) is not proof of a clean
+  history. CI secret-scan is green on every push including `8ebfe75d`
+  (same blind spot). Full detail: `docs/SECRETS_AND_INFRASTRUCTURE.md` §1.
 - **Remaining risk:** the old secret value is still retrievable from pushed
   history by anyone with repo access. Rotation mitigates exploitation, but
   the history itself is still exposed.
@@ -154,6 +176,10 @@ below).
   run report. Least-privilege DB credentials still UNVERIFIED.
 - **Reviewer notes:** Day 4 checks the Supabase credential scope; Day 5+
   migrates legacy plaintext PATs.
+  **Day 4 (2026-11-17):** Supabase scope check NOT done — no Supabase
+  dashboard access from this VM. Owner check recorded in
+  `docs/SECRETS_AND_INFRASTRUCTURE.md` §2 (project
+  `wkvvxqlflhjiqkhwxrsl` → Settings → API).
 
 ### SEC-05 — Check exposed files
 - **Status:** PARTIAL (credential string removed this run; rotation still owed)
@@ -180,6 +206,10 @@ below).
   (now removed, SEC-06). Rotation step = delete Atlas user
   `glanexus_admin` (owner-only; no Atlas target identifiable from the
   repo). The credential string itself is covered by the SEC-03 purge.
+  **Day 4 (2026-11-17):** owner step confirmed as deletion (see
+  `docs/SECRETS_AND_INFRASTRUCTURE.md` §2). Day 4 cannot confirm it —
+  no Atlas access from this VM. Stays PARTIAL until the owner deletes
+  the user (or confirms it is already gone).
 
 ### SEC-06 — Unused packages (and stale duplicates)
 - **Status:** PARTIAL (mongoose removed; stale file deletions outstanding)
@@ -359,6 +389,14 @@ below).
   another registry-allowed runner) and records the vulnerability list with
   evidence. This item stays BLOCKED until then — never PASS.
   — Updated: scan done 2026-11-16; remediation + first CI run still open.
+  **Day 4 (2026-11-17):** OSV re-run — 569 unique packages (was 585),
+  **same 15 findings, identical advisory IDs** (verified by comparing
+  both raw JSON files); `npm outdated` re-verified (root 17/6 major,
+  backend 9/2 major — mongoose gone). `docs/DEPENDENCY_VULNERABILITIES.md`
+  updated. CI workflow push: `.github/workflows/dependency-scan.yml` goes
+  via browser web-UI today (App API 403s on `.github/workflows/`);
+  `scripts/osv-scan.mjs` pushed with the docs via the API. First CI run
+  pending the push — see `docs/SECRETS_AND_INFRASTRUCTURE.md` §4.
 
 ---
 
@@ -636,6 +674,9 @@ below).
 - **Test evidence:** code inspection; production presence of
   `SENTRY_TEST_ROUTE` is UNVERIFIED (owner dashboard check, Day 4 —
   confirm it is unset).
+  **Day 4 (2026-11-17):** live probe `GET /api/_test-error` → **404** —
+  the test route is not enabled in production. Caveat resolved; the
+  dashboard confirm is now a belt-and-braces check only.
 - **Remaining risk:** low, conditional on that Day 4 check.
 - **Reviewer notes:** none.
 
@@ -815,6 +856,10 @@ below).
   (`secureguard-api`) + `VITE_TURNSTILE_SITE_KEY` on Vercel
   (`secureguard-main`, Production) → redeploy both → re-probe must 400
   without a token.
+  **Day 4 re-probe 2026-11-17 (no signup attempted):** live frontend
+  bundle (`assets/index-Ac2tFl7a.js`) contains no Turnstile site key and
+  zero references to `challenges.cloudflare.com`; the token is attached
+  only when present. Captcha is off on both ends — FAIL re-confirmed.
 - **Remaining risk:** medium — no bot protection on signup, password reset
   or contact until the key is set.
 - **Reviewer notes:** fix = Rishabh creates the Turnstile widget in
@@ -957,6 +1002,11 @@ below).
 - **Test evidence:** code inspection. Whether `SENTRY_DSN` is actually set
   in production Render/Vercel env is UNVERIFIED (owner dashboard check,
   Day 4).
+  **Day 4 (2026-11-17):** live frontend bundle contains **zero** `sentry`
+  matches — `VITE_SENTRY_DSN` is unset in production, so frontend error
+  tracking is off. Backend DSN presence is still dashboard-only (not
+  observable from outside); `SENTRY_TEST_ROUTE` verified absent via the
+  404 probe (SEC-26).
 - **Remaining risk:** low. Without a DSN, errors are invisible in
   production — an observability gap, not a vulnerability.
 - **Reviewer notes:** confirm DSN presence on Day 4; add the Day 19

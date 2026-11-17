@@ -1,9 +1,11 @@
 # Dependency Vulnerabilities — SEC-13
 
-Scan date: **2026-11-16 ~01:26 IST** (2026-11-15 19:56 UTC).
+Scan date: **2026-11-17 ~01:02 IST** (2026-11-16 19:32 UTC) — re-run, Day 4.
+Previous scan: 2026-11-16 ~01:26 IST (15 findings, same set — advisory IDs
+identical, verified by comparing the two raw JSON files).
 Status: **measured, not clean** — 15 findings, 0 critical, 3 high. Fixes are
 listed below; none have been applied yet (this unit does not modify
-`package.json` / `package-lock.json`).
+`package.json` / `package-lock.json`). Remediation is Day 9 work.
 
 ## Method
 
@@ -19,9 +21,10 @@ instead with the OSV API, which is reachable from the VM:
   then enriches each hit with a full `GET /v1/vulns/{id}` — the
   querybatch response carries only id + modified, so severity, summary
   and fixed versions come from the per-vulnerability lookup.
-- Raw results JSON (585 packages, 15 findings with full OSV records):
-  `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/osv-scan-results-2026-11-16.json`
-  (kept out of the repo; `osv-scan-results.json` is gitignored).
+- Raw results JSON (569 packages, 15 findings with full OSV records):
+  `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/osv-scan-results-2026-11-17.json`
+  (kept out of the repo; `osv-scan-results.json` is gitignored). Previous
+  run: `.../osv-scan-results-2026-11-16.json` (585 packages).
 - Scope: **direct + transitive** dependencies, as pinned in the lockfiles.
   OSV matching is version-based (the vulnerable version is present in the
   tree); it is NOT a reachability/exploitability analysis for this app.
@@ -32,8 +35,8 @@ instead with the OSV API, which is reachable from the VM:
 
 | | Count |
 |---|---|
-| Unique `package@version` pairs scanned | 585 |
-| Lockfiles | `SecureGaurd-main/package-lock.json` (251 entries), `SecureGaurd-main/backend/package-lock.json` (370 entries) |
+| Unique `package@version` pairs scanned | 569 (585 on 2026-11-16 — lockfiles shrank after the mongoose removal) |
+| Lockfiles | `SecureGaurd-main/package-lock.json` (250 entries), `SecureGaurd-main/backend/package-lock.json` (353 entries) |
 | Vulnerable packages | 8 (all transitive — none is a direct dependency) |
 | Total findings | 15 |
 | Critical | 0 |
@@ -147,7 +150,7 @@ the GitHub Actions UI — no API read tool for runs is available from
 this VM. First run has not happened yet at the time of writing; the
 next scan after the fixes above should be the first green run.
 
-## Outdated packages (context, re-verified 2026-11-16)
+## Outdated packages (context, re-verified 2026-11-17)
 
 `npm outdated` works from the VM (only `npm audit` is blocked).
 
@@ -156,10 +159,11 @@ next scan after the fixes above should be the first green run.
   `concurrently` 9.2.5→10.0.7, `eslint` 9.39.5→10.15.0,
   `framer-motion` 12.43.0→14.14.0, `typescript` 6.0.3→7.0.2. (Was 15
   outdated / 6 major on 2026-11-14; two more minor bumps appeared.)
-- **Backend** (`SecureGaurd-main/backend/`): **10 outdated / 2 major**
-  (unchanged from 2026-11-14). Majors: `dotenv` 17.4.2→18.0.10,
-  `prisma` 7.10.0→8.0.0-rc.33. Minors include `@prisma/client` /
-  `@prisma/adapter-pg` 7.8.0→7.10.1 and `mongoose` 9.11.4→9.12.1.
+- **Backend** (`SecureGaurd-main/backend/`): **9 outdated / 2 major**
+  (was 10 on 2026-11-16 — `mongoose` removed by the fix-all run).
+  Majors: `dotenv` 17.4.2→18.0.10,
+  `prisma` 7.10.0→8.0.0-rc.34. Minors include `@prisma/client` /
+  `@prisma/adapter-pg` 7.8.0→7.10.1.
 
 Outdated ≠ vulnerable: only the 15 findings above are known
 vulnerabilities. The major bumps (notably TypeScript 7, ESLint 10,
