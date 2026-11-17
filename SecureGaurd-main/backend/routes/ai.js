@@ -3,6 +3,10 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+// SEC-31: Vulnerability is an RLS table. Each read/write gets its own
+// short context (the handlers interleave external AI calls between
+// the read and the write, so one transaction is wrong).
+const { withRequestOrgContext } = require('../utils/rlsContext');
 const { generateAiFix } = require('../utils/aiFixEngine');
 
 router.use(authMiddleware);
@@ -15,12 +19,12 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: {
         id: vulnId,
         scan: { organizationId: req.organizationId }
       }
-    });
+    }));
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
 
     // If fix already cached, return it — unless the cached value is the
@@ -53,12 +57,12 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
     // Cache the fix in the database — only in aiFix.
     // Never overwrite description/cweId: they hold the scanner's
     // original finding and must survive AI-fix generation (F10).
-    await prisma.vulnerability.update({
+    await withRequestOrgContext(req, (tx) => tx.vulnerability.update({
       where: { id: vuln.id },
       data: {
         aiFix: result.fixedCode,
       }
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,
@@ -93,19 +97,19 @@ router.patch('/fix/:vulnId/apply', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER'
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: {
         id: vulnId,
         scan: { organizationId: req.organizationId }
       }
-    });
+    }));
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
     if (!vuln.aiFix) return res.status(400).json({ message: 'Generate AI fix first before applying' });
 
-    const updated = await prisma.vulnerability.update({
+    const updated = await withRequestOrgContext(req, (tx) => tx.vulnerability.update({
       where: { id: vuln.id },
       data: { aiFixApplied: true, status: 'fixed', userLabel: 'real' }
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,
@@ -130,18 +134,18 @@ router.patch('/false-positive/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
   if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: {
         id: vulnId,
         scan: { organizationId: req.organizationId }
       }
-    });
+    }));
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
 
-    const updated = await prisma.vulnerability.update({
+    const updated = await withRequestOrgContext(req, (tx) => tx.vulnerability.update({
       where: { id: vuln.id },
       data: { status: 'false_positive', userLabel: 'false_positive' }
-    });
+    }));
 
     res.json({ message: 'Marked as false positive', vulnerability: updated });
   } catch (err) {

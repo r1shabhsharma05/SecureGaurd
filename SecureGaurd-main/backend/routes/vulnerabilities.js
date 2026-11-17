@@ -3,6 +3,9 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+// SEC-31: Vulnerability is an RLS table — every read/write runs in a
+// context. createAuditLog self-wraps, so the audit calls stay as-is.
+const { withRequestOrgContext } = require('../utils/rlsContext');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -19,7 +22,7 @@ router.get('/', async (req, res) => {
       ...(scanId && !isNaN(parseInt(scanId)) && { scanId: parseInt(scanId) }),
     };
 
-    const vulns = await prisma.vulnerability.findMany({
+    const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where,
       include: {
         scan: { select: { id: true, repository: { select: { id: true, name: true, fullName: true, platform: true, language: true } } } },
@@ -29,7 +32,7 @@ router.get('/', async (req, res) => {
         { createdAt: 'desc' },
       ],
       take: 100,
-    });
+    }));
 
     res.json(vulns);
   } catch (err) {
@@ -46,7 +49,7 @@ router.get('/:id', async (req, res) => {
   }
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: {
         id: vulnId,
         scan: { organizationId: req.organizationId }
@@ -73,7 +76,7 @@ router.get('/:id', async (req, res) => {
           }
         }
       }
-    });
+    }));
 
     if (!vuln) {
       return res.status(404).json({ message: 'Vulnerability not found' });
@@ -85,7 +88,7 @@ router.get('/:id', async (req, res) => {
     // own row is excluded so the list is never self-referential.
     let occurrences = [];
     if (vuln.ruleId && vuln.scan && vuln.scan.repository) {
-      occurrences = await prisma.vulnerability.findMany({
+      occurrences = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
         where: {
           id: { not: vulnId },
           ruleId: vuln.ruleId,
@@ -98,7 +101,7 @@ router.get('/:id', async (req, res) => {
         },
         orderBy: { createdAt: 'desc' },
         take: 20,
-      });
+      }));
     }
 
     res.json({ ...vuln, occurrences });
@@ -121,10 +124,10 @@ router.get('/:id/explanation', async (req, res) => {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
   }
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: { id: vulnId, scan: { organizationId: req.organizationId } },
       select: { mlFeatures: true },
-    });
+    }));
     if (!vuln) {
       return res.status(404).json({ message: 'Vulnerability not found' });
     }
@@ -194,9 +197,9 @@ router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
   if (!allowed.includes(status)) return res.status(400).json({ message: 'Invalid status' });
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: { id: vulnId, scan: { organizationId: req.organizationId } },
-    });
+    }));
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
 
     let userLabel = undefined;
@@ -206,13 +209,13 @@ router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
       userLabel = 'real';
     }
 
-    const updated = await prisma.vulnerability.update({
+    const updated = await withRequestOrgContext(req, (tx) => tx.vulnerability.update({
       where: { id: vuln.id },
       data: {
         status,
         ...(userLabel && { userLabel })
       },
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,
@@ -243,15 +246,15 @@ router.patch('/:id/label', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asyn
   if (!allowed.includes(label)) return res.status(400).json({ message: 'Invalid label. Must be "real" or "false_positive"' });
 
   try {
-    const vuln = await prisma.vulnerability.findFirst({
+    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: { id: vulnId, scan: { organizationId: req.organizationId } },
-    });
+    }));
     if (!vuln) return res.status(404).json({ message: 'Vulnerability not found' });
 
-    const updated = await prisma.vulnerability.update({
+    const updated = await withRequestOrgContext(req, (tx) => tx.vulnerability.update({
       where: { id: vuln.id },
       data: { userLabel: label },
-    });
+    }));
 
     // Audit every label so retraining data is attributable to the labeler
     // (same shape as the status route above).

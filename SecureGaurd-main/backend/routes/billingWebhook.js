@@ -3,6 +3,16 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const { verifyWebhookSignature, mapRazorpayStatus } = require('../utils/razorpay');
 const { getPlanConfig } = require('../config/plans');
+// SEC-31: Subscription + AuditLog are RLS tables, and a webhook has no
+// authenticated user — the tenant comes from the payload. The subscription
+// id is the secret: app_org_id_for_razorpay_subscription (SECURITY
+// DEFINER) maps it to the org; the fallback is notes.organizationId,
+// stamped by OUR server at creation and round-tripped through Razorpay
+// inside a signature-verified payload. Context is org-only (rule 6).
+// Unresolvable events proceed without context: tenant reads return zero
+// rows and no tenant write is attempted (saveSubscription returns null,
+// audit only fires when a row was saved).
+const { setOrgOnlyContext, parseContextId, resolveOrgIdForRazorpaySubscription } = require('../utils/rlsContext');
 
 /**
  * Resolves the local subscription row for a Razorpay subscription entity.
@@ -167,6 +177,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       // without this a retried/delayed cancel could resurrect a
       // subscription a newer event already changed. The event row above
       // is still kept, so the dedupe holds and the stale event is acked.
+      //
+      // SEC-31: set the org context BEFORE any Subscription/AuditLog
+      // access below (resolveOrg, saveSubscription, audit all run on
+      // this tx). Resolved from the subscription id via the SECURITY
+      // DEFINER resolver, falling back to notes.organizationId.
+      const webhookSubId = eventType === 'payment.failed'
+        ? (payEntity?.subscription_id || subEntity?.id)
+        : subEntity?.id;
+      let webhookOrgId = webhookSubId
+        ? await resolveOrgIdForRazorpaySubscription(tx, webhookSubId)
+        : null;
+      if (!webhookOrgId) webhookOrgId = parseContextId(subEntity?.notes?.organizationId);
+      if (webhookOrgId) await setOrgOnlyContext(tx, webhookOrgId);
+
       if (eventTime) {
         const lookupEntity = eventType === 'payment.failed'
           ? { id: payEntity?.subscription_id || subEntity?.id }

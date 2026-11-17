@@ -4,6 +4,9 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { getOrgUsage, getOrgSubscription } = require('../services/billingService');
+// SEC-31: Organization/Subscription are RLS tables; the billing service
+// functions take the handler's tx (see services/billingService.js).
+const { withRequestOrgContext } = require('../utils/rlsContext');
 const { PLANS, getPlanConfig } = require('../config/plans');
 const {
   createSubscription,
@@ -21,7 +24,7 @@ router.use(authMiddleware);
  */
 router.get('/usage', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
   try {
-    const usage = await getOrgUsage(req.organizationId);
+    const usage = await withRequestOrgContext(req, (tx) => getOrgUsage(req.organizationId, tx));
     return res.json(usage);
   } catch (err) {
     console.error('Error fetching billing usage:', err);
@@ -54,9 +57,9 @@ router.post('/create-subscription', requireOrgContext, requireOrgRole(['OWNER'])
       return res.status(503).json({ message: 'Billing is not configured for the selected plan. Please try again later.' });
     }
 
-    const org = await prisma.organization.findUnique({
+    const org = await withRequestOrgContext(req, (tx) => tx.organization.findUnique({
       where: { id: req.organizationId }
-    });
+    }));
 
     if (!org) {
       return res.status(404).json({ message: 'Organization not found' });
@@ -99,7 +102,7 @@ router.post('/create-subscription', requireOrgContext, requireOrgRole(['OWNER'])
  */
 router.get('/invoices', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   try {
-    const sub = await getOrgSubscription(req.organizationId);
+    const sub = await withRequestOrgContext(req, (tx) => getOrgSubscription(req.organizationId, tx));
 
     if (!sub.razorpaySubscriptionId) {
       return res.json({ invoices: [] });
@@ -125,7 +128,7 @@ router.get('/invoices', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), a
  */
 router.post('/cancel-subscription', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
   try {
-    const sub = await getOrgSubscription(req.organizationId);
+    const sub = await withRequestOrgContext(req, (tx) => getOrgSubscription(req.organizationId, tx));
 
     // Nothing to cancel without a real Razorpay subscription: setting the flag
     // on a FREE plan would report a cancellation that does not exist.
@@ -143,10 +146,10 @@ router.post('/cancel-subscription', requireOrgContext, requireOrgRole(['OWNER'])
       return res.status(502).json({ message: 'Billing provider error. Subscription was not canceled.' });
     }
 
-    const updatedSub = await prisma.subscription.update({
+    const updatedSub = await withRequestOrgContext(req, (tx) => tx.subscription.update({
       where: { organizationId: req.organizationId },
       data: { cancelAtPeriodEnd: true }
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,

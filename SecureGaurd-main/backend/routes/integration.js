@@ -10,6 +10,13 @@ const crypto = require('crypto');
 const { encrypt, decrypt } = require('../utils/cryptoUtils');
 const { checkCanTriggerScan } = require('../services/billingService');
 const rateLimit = require('express-rate-limit');
+// SEC-31: Repository/Scan/Vulnerability are RLS tables. The webhook has
+// no authenticated user — the tenant comes from the (fullName, platform)
+// lookup key via the SECURITY DEFINER resolvers, then each DB segment
+// runs in its own short withOrgContext (the handler interleaves minutes
+// of scanning + classifier HTTP calls, so one long transaction is wrong).
+// User-only endpoints below need no change (User has no RLS).
+const { withRequestOrgContext, withOrgContext, resolveOrgIdForRepository, resolveUserIdForRepository } = require('../utils/rlsContext');
 
 const webhookLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
@@ -91,9 +98,20 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     // verification so the per-repo secret can be tried first; a bad
     // signature still returns 401 whether or not the repo exists, so
     // this reveals nothing about registration.
-    const repo = await prisma.repository.findFirst({
-      where: { fullName: repoFullName, platform },
-    });
+    // SEC-31: no org context exists yet — the (fullName, platform) pair
+    // is the key, so the SECURITY DEFINER resolvers map it to the org +
+    // owning user (ids only) and the row is then read under that context.
+    // An unregistered repo resolves to nulls and the signature check
+    // below still runs against the shared secret, exactly as before.
+    const { organizationId: webhookOrgId, userId: webhookUserId } = await prisma.$transaction(async (tx) => ({
+      organizationId: await resolveOrgIdForRepository(tx, repoFullName, platform),
+      userId: await resolveUserIdForRepository(tx, repoFullName, platform),
+    }));
+    const repo = (webhookOrgId && webhookUserId)
+      ? await withOrgContext(webhookOrgId, webhookUserId, (tx) => tx.repository.findFirst({
+          where: { fullName: repoFullName, platform },
+        }))
+      : null;
 
     if (!verifyWebhookSignature(platform, req, repo)) {
       return res.status(401).json({ message: 'Invalid webhook signature or secret token' });
@@ -110,7 +128,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     // work and BEFORE the delivery is recorded, so a quota-rejected
     // delivery is not marked processed and a later retry still scans.
     if (repo.organizationId) {
-      const limitCheck = await checkCanTriggerScan(repo.organizationId);
+      const limitCheck = await withOrgContext(repo.organizationId, repo.userId, (tx) => checkCanTriggerScan(repo.organizationId, tx));
       if (!limitCheck.allowed) {
         await createAuditLog(
           repo.organizationId,
@@ -154,7 +172,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     try {
       scanTarget = resolveScanTarget(repo, { branch });
     } catch (resolveErr) {
-      await prisma.scan.create({
+      await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.scan.create({
         data: {
           userId: repo.userId,
           organizationId: repo.organizationId,
@@ -164,7 +182,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
           commitSha: commitSha || 'push-event',
           completedAt: new Date(),
         },
-      });
+      }));
       return res.status(502).json({ message: `Scan failed: ${resolveErr.message}` });
     }
     const scanResult = runSecurityScan(scanTarget.scanPath);
@@ -172,22 +190,22 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     // Append ML Features
     for (let finding of scanResult.findings) {
       if (finding.mlFeatures) {
-        const seenCount = await prisma.vulnerability.count({
+        const seenCount = await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.count({
           where: {
             ruleId: finding.ruleId,
             filePath: finding.filePath,
             scan: { repositoryId: repo.id }
           }
-        });
+        }));
         finding.mlFeatures.same_finding_seen_before_count = seenCount;
 
-        const dismissedCount = await prisma.vulnerability.count({
+        const dismissedCount = await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.count({
           where: {
             ruleId: finding.ruleId,
             status: 'ignored',
             scan: { repositoryId: repo.id }
           }
-        });
+        }));
         // Classifier schema field is 0/1 — boolean, not the raw count.
         finding.mlFeatures.developer_dismissed_similar_before = dismissedCount > 0 ? 1 : 0;
         finding.mlFeatures.file_change_frequency = 0;
@@ -247,7 +265,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     const secrets   = finalFindings.filter(f => f.type === 'secret').length;
 
     // Create scan with repository's organizationId
-    const scan = await prisma.scan.create({
+    const scan = await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.scan.create({
       data: {
         userId: repo.userId,
         organizationId: repo.organizationId,
@@ -265,7 +283,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         durationMs: scanResult.durationMs,
         completedAt: new Date(),
       },
-    });
+    }));
 
     if (finalFindings.length > 0) {
       const dbFindings = finalFindings.map(f => ({
@@ -281,14 +299,14 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         codeSnippet: f.codeSnippet,
         status: 'open'
       }));
-      await prisma.vulnerability.createMany({ data: dbFindings });
+      await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';
-    await prisma.repository.update({
+    await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.repository.update({
       where: { id: repo.id },
       data: { riskLevel, updatedAt: new Date() },
-    });
+    }));
 
     if (repo.organizationId) {
       await createAuditLog(
@@ -302,7 +320,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       // Day 7 — same opt-in alerts as the manual scan path (best-effort).
       try {
         const { dispatchScanAlerts } = require('../utils/scanAlerts');
-        await dispatchScanAlerts({ organizationId: repo.organizationId, scan, repository: repo });
+        await withOrgContext(repo.organizationId, repo.userId, (tx) => dispatchScanAlerts({ organizationId: repo.organizationId, scan, repository: repo, tx }));
       } catch (alertErr) {
         console.error('Webhook scan alert dispatch failed (scan itself succeeded):', alertErr.message);
       }
@@ -454,9 +472,9 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
 
   try {
     const { parseRepoFullName, githubRepoPath, buildCheckRunPayload, buildPrCommentBody } = require('../utils/prBot');
-    const repo = await prisma.repository.findFirst({
+    const repo = await withRequestOrgContext(req, (tx) => tx.repository.findFirst({
       where: { id: parseInt(repositoryId), organizationId: req.organizationId },
-    });
+    }));
     if (!repo) return res.status(404).json({ message: 'Repository not found in active organization' });
     if (repo.platform !== 'github') {
       return res.status(400).json({ message: 'PR bot currently supports GitHub repositories only' });
@@ -473,10 +491,10 @@ router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEV
     // The verdict must come from a scan of THIS commit only. A request
     // for a commit with no scan falls through to the existing neutral
     // no-scan branch below — never to an unrelated latest scan's verdict.
-    const scan = await prisma.scan.findFirst({
+    const scan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { repositoryId: repo.id, organizationId: req.organizationId, commitSha },
       orderBy: { createdAt: 'desc' },
-    });
+    }));
     const criticalCount = scan ? scan.criticalCount : 0;
     const highCount = scan ? scan.highCount : 0;
     const mediumCount = scan ? scan.mediumCount : 0;

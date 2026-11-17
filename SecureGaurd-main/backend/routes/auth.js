@@ -10,6 +10,14 @@ const { requireTurnstile } = require('../utils/turnstile');
 const { z, zPassword, validateBody } = require('../utils/validation');
 const { planAccountDeletion } = require('../utils/accountDeletion');
 const { cancelOrgProviderSubscription } = require('./organizations');
+// SEC-31: the account-deletion path touches RLS tables only (memberships,
+// subscriptions, org assets, audit rows). The pre-transaction lookups run
+// under withUserContext (own memberships) / withOrgContext per org
+// (Subscription); inside the $transaction, setOrgContext is re-set per
+// org-section before that org's statements (SET LOCAL can be re-set
+// mid-transaction). All other handlers in this file touch User only
+// (no RLS) and are untouched.
+const { withUserContext, withOrgContext, setOrgContext } = require('../utils/rlsContext');
 const {
   providerConfig,
   isProviderConfigured,
@@ -807,12 +815,14 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
     return res.status(400).json({ message: 'Your current password and the typed confirmation DELETE are required.' });
   }
   try {
-    const user = await prisma.user.findUnique({
+    // User row itself has no RLS, but the included memberships do: run
+    // under user-only context so the caller's OWN memberships are visible.
+    const user = await withUserContext(req.userId, (tx) => tx.user.findUnique({
       where: { id: req.userId },
       include: {
         memberships: { include: { organization: { include: { memberships: true } } } },
       },
-    });
+    }));
     if (!user) return res.status(404).json({ message: 'Account not found' });
     if (!(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Password is incorrect' });
@@ -845,7 +855,9 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
     // provider ids needed to cancel. Fail closed (502) so a live paid
     // subscription is never orphaned by account deletion.
     for (const orgId of plan.deletions) {
-      const sub = await prisma.subscription.findUnique({ where: { organizationId: orgId } });
+      // Subscription is an RLS table: a context-free read would return
+      // null and silently skip the billing block. Per-org context.
+      const sub = await withOrgContext(orgId, req.userId, (tx) => tx.subscription.findUnique({ where: { organizationId: orgId } }));
       const billingBlock = await cancelOrgProviderSubscription(sub);
       if (billingBlock) {
         return res.status(billingBlock.status).json({ message: billingBlock.message });
@@ -853,6 +865,8 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
     }
     await prisma.$transaction(async (tx) => {
       for (const t of plan.transfers) {
+        // Context is per-org: re-set before each org's statements.
+        await setOrgContext(tx, t.organizationId, req.userId);
         await tx.organizationMembership.update({
           where: { userId_organizationId: { userId: t.newOwnerId, organizationId: t.organizationId } },
           data: { role: 'OWNER' },
@@ -860,6 +874,7 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
         await reassignOrgAssets(tx, t.organizationId, t.newOwnerId);
       }
       for (const orgId of plan.leaves) {
+        await setOrgContext(tx, orgId, req.userId);
         // Leaves used to only delete the membership, so the later
         // tx.user.delete cascade-destroyed every repository, scan and
         // compliance report the departing user created in a surviving
@@ -880,6 +895,7 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
         });
       }
       for (const orgId of plan.deletions) {
+        await setOrgContext(tx, orgId, req.userId);
         await tx.organization.delete({ where: { id: orgId } });
       }
       // Audit INSIDE the transaction, before the user row is deleted:
@@ -890,11 +906,13 @@ router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res)
       // survive. (Writing them after the transaction, as before, meant
       // the insert referenced a deleted user and was silently swallowed.)
       for (const t of plan.transfers) {
+        await setOrgContext(tx, t.organizationId, req.userId);
         await tx.auditLog.create({
           data: { organizationId: t.organizationId, actorId: req.userId, action: 'OWNERSHIP_TRANSFERRED', targetType: 'ORGANIZATION', targetId: String(t.organizationId), details: { reason: 'account_deletion', newOwnerId: t.newOwnerId } },
         });
       }
       for (const orgId of plan.leaves) {
+        await setOrgContext(tx, orgId, req.userId);
         await tx.auditLog.create({
           data: { organizationId: orgId, actorId: req.userId, action: 'MEMBER_REMOVED', targetType: 'USER', targetId: String(req.userId), details: { reason: 'account_deletion' } },
         });

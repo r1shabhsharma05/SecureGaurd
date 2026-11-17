@@ -15,6 +15,13 @@ const { resolveScanTarget } = require('../utils/repoScanSource');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
 const { scanAPISpecFile } = require('../utils/apiSpecScanner');
 const { validateBody, validateQuery, scanTriggerSchema, zPagination } = require('../utils/validation');
+// SEC-31: Scan/Vulnerability/Sbom/CustomRule/Repository are RLS tables.
+// Plain handlers run through withRequestOrgContext (tx replaces prisma).
+// POST /trigger interleaves minutes of scanning + classifier HTTP calls
+// with DB writes, so it does NOT hold one transaction open: each DB
+// segment gets its own short context instead. dispatchScanAlerts takes
+// the handler's tx when one exists (see the call site).
+const { withRequestOrgContext, withUserContext, withOrgContext } = require('../utils/rlsContext');
 
 // ─── ML feature: file change frequency from git history ─────────────────────
 // The FP classifier was trained with file_change_frequency in 0..50
@@ -54,29 +61,40 @@ router.get('/export-feedback', validateQuery(zPagination), async (req, res, next
   authMiddleware(req, res, next);
 }, async (req, res) => {
   try {
-    const where = {
-      userLabel: { not: null },
-      mlFeatures: { not: null }
-    };
-    if (!req.serviceKeyCaller) {
-      const memberships = await prisma.organizationMembership.findMany({
-        where: { userId: req.userId },
-        select: { organizationId: true }
-      });
-      where.scan = { organizationId: { in: memberships.map(m => m.organizationId) } };
-    }
     // Unbounded export: cap the rows returned (default 1000, max 5000)
     // so one export cannot dump the whole labeled-findings table.
     // validateQuery(zPagination) already parsed/clamped ?limit=.
     const take = req.query.limit;
-    const vulns = await prisma.vulnerability.findMany({
-      where,
-      select: {
-        userLabel: true,
-        mlFeatures: true
-      },
-      take,
-    });
+    let vulns;
+    if (req.serviceKeyCaller) {
+      // SEC-31: the operator export has no tenant context, and RLS
+      // returns zero rows without one. Fail LOUD (503) rather than
+      // silently exporting an empty dataset to the retraining pipeline.
+      // The owner must pick the privileged path (a service-role client
+      // or a SECURITY DEFINER export function) — see the gate report.
+      console.error('[export-feedback] operator export unavailable under RLS (SEC-31): no service-role path configured');
+      return res.status(503).json({ message: 'Feedback export is unavailable while RLS is being rolled out (SEC-31).' });
+    }
+    const memberships = await withUserContext(req.userId, (tx) => tx.organizationMembership.findMany({
+      where: { userId: req.userId },
+      select: { organizationId: true }
+    }));
+    // One short RLS transaction per org: a single context holds one org,
+    // and the export spans every org the user belongs to. take applies to
+    // the concatenated export (the original had no orderBy, so row order
+    // was unspecified anyway).
+    const perOrg = await Promise.all(memberships.map((m) =>
+      withOrgContext(m.organizationId, req.userId, (tx) => tx.vulnerability.findMany({
+        where: {
+          userLabel: { not: null },
+          mlFeatures: { not: null },
+          scan: { organizationId: m.organizationId }
+        },
+        select: { userLabel: true, mlFeatures: true },
+        take,
+      }))
+    ));
+    vulns = perOrg.flat().slice(0, take);
 
     const formatted = vulns.map(v => {
       const features = typeof v.mlFeatures === 'string' ? JSON.parse(v.mlFeatures) : v.mlFeatures;
@@ -116,7 +134,7 @@ router.use(requireOrgContext);
 // GET /api/scans — list scans for active organization
 router.get('/', async (req, res) => {
   try {
-    const scans = await prisma.scan.findMany({
+    const scans = await withRequestOrgContext(req, (tx) => tx.scan.findMany({
       where: { organizationId: req.organizationId },
       include: {
         repository: { select: { name: true, fullName: true, platform: true } },
@@ -124,7 +142,7 @@ router.get('/', async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
       take: 50,
-    });
+    }));
     res.json(scans);
   } catch (err) {
     console.error('Error listing scans:', err);
@@ -138,13 +156,13 @@ router.get('/:id', async (req, res) => {
   if (isNaN(scanId)) return res.status(400).json({ message: 'Invalid scan ID' });
 
   try {
-    const scan = await prisma.scan.findFirst({
+    const scan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { id: scanId, organizationId: req.organizationId },
       include: {
         repository: true,
         vulnerabilities: { orderBy: [{ severity: 'asc' }, { createdAt: 'desc' }] },
       },
-    });
+    }));
     if (!scan) return res.status(404).json({ message: 'Scan not found' });
     res.json(scan);
   } catch (err) {
@@ -170,8 +188,9 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
 
   let scanTarget = null;
   try {
-    // Entitlement Check: Monthly Scan Limit
-    const limitCheck = await checkCanTriggerScan(req.organizationId);
+    // Entitlement Check: Monthly Scan Limit (own short RLS context —
+    // the limit counts are tenant-table reads and must not run free).
+    const limitCheck = await withRequestOrgContext(req, (tx) => checkCanTriggerScan(req.organizationId, tx));
     if (!limitCheck.allowed) {
       await createAuditLog(
         req.organizationId,
@@ -189,9 +208,9 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     }
 
     // Verify repo belongs to active organization
-    const repo = await prisma.repository.findFirst({
+    const repo = await withRequestOrgContext(req, (tx) => tx.repository.findFirst({
       where: { id: parseInt(repositoryId), organizationId: req.organizationId },
-    });
+    }));
     if (!repo) return res.status(404).json({ message: 'Repository not found in active organization' });
 
     // Scan the CONNECTED repository's own tree (clone/path resolution),
@@ -199,7 +218,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     try {
       scanTarget = resolveScanTarget(repo);
     } catch (resolveErr) {
-      const failedScan = await prisma.scan.create({
+      const failedScan = await withRequestOrgContext(req, (tx) => tx.scan.create({
         data: {
           userId: req.userId,
           organizationId: req.organizationId,
@@ -208,7 +227,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
           branch: 'main',
           completedAt: new Date(),
         },
-      });
+      }));
       await createAuditLog(
         req.organizationId,
         req.userId,
@@ -226,10 +245,10 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     // a bad row degrades to built-in rules only, and the scan still runs.
     let customRules = [];
     try {
-      const customRows = await prisma.customRule.findMany({
+      const customRows = await withRequestOrgContext(req, (tx) => tx.customRule.findMany({
         where: { organizationId: req.organizationId, enabled: true },
         orderBy: { ruleId: 'asc' },
-      });
+      }));
       customRules = customRows.map(storedRuleToParsed);
     } catch (customErr) {
       console.error('Custom rules unavailable, scanning with built-in rules only:', customErr.message);
@@ -244,22 +263,22 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     // Append ML Features
     for (let finding of scanResult.findings) {
       if (finding.mlFeatures) {
-        const seenCount = await prisma.vulnerability.count({
+        const seenCount = await withRequestOrgContext(req, (tx) => tx.vulnerability.count({
           where: {
             ruleId: finding.ruleId,
             filePath: finding.filePath,
             scan: { repositoryId: repo.id }
           }
-        });
+        }));
         finding.mlFeatures.same_finding_seen_before_count = seenCount;
 
-        const dismissedCount = await prisma.vulnerability.count({
+        const dismissedCount = await withRequestOrgContext(req, (tx) => tx.vulnerability.count({
           where: {
             ruleId: finding.ruleId,
             status: 'ignored',
             scan: { repositoryId: repo.id }
           }
-        });
+        }));
         // Classifier schema field is 0/1 — send "was a similar finding ever
         // dismissed", not the raw dismissal count.
         finding.mlFeatures.developer_dismissed_similar_before = dismissedCount > 0 ? 1 : 0;
@@ -346,7 +365,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     const lowCount  = finalFindings.filter(f => f.status === 'open' && f.severity === 'low').length;
     const secrets   = finalFindings.filter(f => f.status === 'open' && f.type === 'secret').length;
 
-    const scan = await prisma.scan.create({
+    const scan = await withRequestOrgContext(req, (tx) => tx.scan.create({
       data: {
         userId: req.userId,
         organizationId: req.organizationId,
@@ -363,7 +382,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
         durationMs: scanResult.durationMs,
         completedAt: new Date(),
       },
-    });
+    }));
 
     if (finalFindings.length > 0) {
       const dbFindings = finalFindings.map(f => ({
@@ -382,14 +401,14 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
         status: f.status || 'open',
         mlFeatures: f.mlFeatures ? f.mlFeatures : null
       }));
-      await prisma.vulnerability.createMany({ data: dbFindings });
+      await withRequestOrgContext(req, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';
-    await prisma.repository.update({
+    await withRequestOrgContext(req, (tx) => tx.repository.update({
       where: { id: repo.id },
       data: { riskLevel, updatedAt: new Date() },
-    });
+    }));
 
     // Generate & Store SPDX 2.3 + CycloneDX 1.6 Software Bills of Materials
     // (SBOM) — both from the same component list, so they cannot disagree.
@@ -435,7 +454,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
         }
       }
       if (spdxToStore) {
-        await prisma.sbom.create({
+        await withRequestOrgContext(req, (tx) => tx.sbom.create({
           data: {
             organizationId: req.organizationId,
             repositoryId: repo.id,
@@ -452,7 +471,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
             spdxDoc: spdxToStore,
             cycloneDxDoc: cycloneValid.isValid ? cycloneDxDocument : null
           }
-        });
+        }));
 
         await createAuditLog(
           req.organizationId,
@@ -482,7 +501,9 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     // the dispatcher never throws, so a failed alert cannot fail a scan.
     try {
       const { dispatchScanAlerts } = require('../utils/scanAlerts');
-      await dispatchScanAlerts({ organizationId: req.organizationId, scan, repository: repo });
+      // Own short context: without it the AlertSetting lookup (an RLS
+      // table) returns zero rows and no alert is ever sent.
+      await withRequestOrgContext(req, (tx) => dispatchScanAlerts({ organizationId: req.organizationId, scan, repository: repo, tx }));
     } catch (alertErr) {
       console.error('Scan alert dispatch failed (scan itself succeeded):', alertErr.message);
     }
@@ -569,13 +590,13 @@ router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', '
 // GET /api/scans/stats/summary — dashboard summary stats for active organization
 router.get('/stats/summary', async (req, res) => {
   try {
-    const vulns = await prisma.vulnerability.findMany({
+    const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where: {
         scan: { organizationId: req.organizationId },
         status: 'open',
       },
       select: { severity: true },
-    });
+    }));
 
     const critical = vulns.filter(v => v.severity === 'critical').length;
     const high     = vulns.filter(v => v.severity === 'high').length;
@@ -584,11 +605,11 @@ router.get('/stats/summary', async (req, res) => {
     const total    = vulns.length;
     const health   = Math.max(0, 100 - critical * 15 - high * 8 - medium * 3 - low);
 
-    const lastScan = await prisma.scan.findFirst({
+    const lastScan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { organizationId: req.organizationId, status: 'completed' },
       orderBy: { createdAt: 'desc' },
       select: { durationMs: true, totalFiles: true, createdAt: true },
-    });
+    }));
 
     res.json({ critical, high, medium, low, total, health, lastScan });
   } catch (err) {

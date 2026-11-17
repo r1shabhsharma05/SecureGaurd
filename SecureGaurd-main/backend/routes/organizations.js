@@ -7,6 +7,14 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { getOrgUsage } = require('../services/billingService');
 const { cancelSubscription } = require('../utils/razorpay');
 const { sendMail } = require('../utils/mailer');
+// SEC-31: every Organization/OrganizationMembership/OrganizationInvitation/
+// Subscription/AuditLog query must run with RLS context set. Plain
+// handlers go through withRequestOrgContext (tx replaces prisma); the
+// list/create pre-checks run under withUserContext (user-only: no org
+// context exists yet); existing $transactions set the context inside
+// instead (no nested transactions). createAuditLog self-wraps when
+// called without a tx, so all audit calls below stay as-is.
+const { withRequestOrgContext, withUserContext, setOrgContext, setUserContext } = require('../utils/rlsContext');
 
 // Per-user cap on organization creation: every org mints a fresh FREE
 // quota (3 repos, 10 scans/month, 3 members), so unbounded creation
@@ -63,7 +71,10 @@ function slugify(text) {
 // ── GET /api/organizations — List user's organizations ───────────────────────
 router.get('/', async (req, res) => {
   try {
-    const memberships = await prisma.organizationMembership.findMany({
+    // No org context on this route (no requireOrgContext): user-only
+    // context — the membership policy's user disjunct makes the caller's
+    // own memberships visible.
+    const memberships = await withUserContext(req.userId, (tx) => tx.organizationMembership.findMany({
       where: { userId: req.userId },
       include: {
         organization: {
@@ -73,7 +84,7 @@ router.get('/', async (req, res) => {
         }
       },
       orderBy: { createdAt: 'asc' }
-    });
+    }));
 
     const orgs = memberships.map(m => ({
       id: m.organization.id,
@@ -107,34 +118,59 @@ router.post('/', async (req, res) => {
   // Per-user org cap. Counted before the transaction and answered with
   // 403 directly: throwing inside prisma.$transaction is swallowed by
   // the catch-all below and would surface as 500.
-  const ownedOrgCount = await prisma.organizationMembership.count({ where: { userId: req.userId } });
+  const ownedOrgCount = await withUserContext(req.userId, (tx) => tx.organizationMembership.count({ where: { userId: req.userId } }));
   if (ownedOrgCount >= MAX_ORGS_PER_USER) {
     return res.status(403).json({ message: `You have reached the limit of ${MAX_ORGS_PER_USER} organizations per user.` });
   }
 
-  // Ensure unique slug
+  // Ensure unique slug — best-effort pre-check only: under user-only
+  // context it can see just the caller's own orgs, so a slug taken by
+  // ANOTHER org is invisible under RLS. The create below retries on
+  // P2002 (unique slug) with the next suffix instead of 500ing — two
+  // users naming an org "Acme" is an ordinary case, not an error.
   let suffix = 0;
-  while (await prisma.organization.findUnique({ where: { slug } })) {
+  while (await withUserContext(req.userId, (tx) => tx.organization.findUnique({ where: { slug } }))) {
     suffix++;
     slug = `${slugify(cleanName)}-${suffix}`;
   }
 
   try {
-    const org = await prisma.$transaction(async (tx) => {
-      const newOrg = await tx.organization.create({
-        data: { name: cleanName, slug }
-      });
+    let org = null;
+    let attempts = 0;
+    while (!org) {
+      try {
+        org = await prisma.$transaction(async (tx) => {
+          // Bootstrap: org variable UNSET + user variable SET is the only
+          // state the Organization INSERT policy allows (see orgMigration.js).
+          await setUserContext(tx, req.userId);
+          const newOrg = await tx.organization.create({
+            data: { name: cleanName, slug }
+          });
 
-      await tx.organizationMembership.create({
-        data: {
-          userId: req.userId,
-          organizationId: newOrg.id,
-          role: 'OWNER'
+          // Now the org exists: set the org variable before the OWNER
+          // membership insert.
+          await setOrgContext(tx, newOrg.id, req.userId);
+
+          await tx.organizationMembership.create({
+            data: {
+              userId: req.userId,
+              organizationId: newOrg.id,
+              role: 'OWNER'
+            }
+          });
+
+          return newOrg;
+        });
+      } catch (txErr) {
+        if (txErr.code === 'P2002' && attempts < 5) {
+          attempts++;
+          suffix++;
+          slug = `${slugify(cleanName)}-${suffix}`;
+          continue;
         }
-      });
-
-      return newOrg;
-    });
+        throw txErr;
+      }
+    }
 
     await createAuditLog(org.id, req.userId, 'ORGANIZATION_CREATED', 'ORGANIZATION', String(org.id), { name: org.name, slug: org.slug });
 
@@ -154,12 +190,12 @@ router.post('/', async (req, res) => {
 // ── GET /api/organizations/:id — Get details of an organization ─────────────
 router.get('/:organizationId', requireOrgContext, async (req, res) => {
   try {
-    const org = await prisma.organization.findUnique({
+    const org = await withRequestOrgContext(req, (tx) => tx.organization.findUnique({
       where: { id: req.organizationId },
       include: {
         _count: { select: { memberships: true, repositories: true, scans: true } }
       }
-    });
+    }));
 
     if (!org) return res.status(404).json({ message: 'Organization not found' });
 
@@ -189,10 +225,10 @@ router.patch('/:organizationId', requireOrgContext, requireOrgRole(['OWNER', 'AD
   }
 
   try {
-    const updated = await prisma.organization.update({
+    const updated = await withRequestOrgContext(req, (tx) => tx.organization.update({
       where: { id: req.organizationId },
       data: { name: name.trim() }
-    });
+    }));
 
     await createAuditLog(req.organizationId, req.userId, 'ORGANIZATION_UPDATED', 'ORGANIZATION', String(req.organizationId), { newName: updated.name });
 
@@ -209,7 +245,7 @@ router.delete('/:organizationId', requireOrgContext, requireOrgRole(['OWNER']), 
     // Cancel-then-delete, fail closed: a live provider subscription
     // must not outlive the org — the Subscription row cascade-deletes
     // with it, destroying the only ids needed to cancel.
-    const sub = await prisma.subscription.findUnique({ where: { organizationId: req.organizationId } });
+    const sub = await withRequestOrgContext(req, (tx) => tx.subscription.findUnique({ where: { organizationId: req.organizationId } }));
     const billingBlock = await cancelOrgProviderSubscription(sub);
     if (billingBlock) {
       return res.status(billingBlock.status).json({ message: billingBlock.message });
@@ -220,9 +256,9 @@ router.delete('/:organizationId', requireOrgContext, requireOrgRole(['OWNER']), 
     // and cannot be retained without a schema change (schema owner).
     await createAuditLog(req.organizationId, req.userId, 'ORGANIZATION_DELETED', 'ORGANIZATION', String(req.organizationId), { name: req.organization.name });
 
-    await prisma.organization.delete({
+    await withRequestOrgContext(req, (tx) => tx.organization.delete({
       where: { id: req.organizationId }
-    });
+    }));
 
     res.json({ message: 'Organization deleted successfully' });
   } catch (err) {
@@ -234,7 +270,7 @@ router.delete('/:organizationId', requireOrgContext, requireOrgRole(['OWNER']), 
 // ── GET /api/organizations/:id/members — List org members ────────────────────
 router.get('/:organizationId/members', requireOrgContext, async (req, res) => {
   try {
-    const members = await prisma.organizationMembership.findMany({
+    const members = await withRequestOrgContext(req, (tx) => tx.organizationMembership.findMany({
       where: { organizationId: req.organizationId },
       include: {
         user: {
@@ -242,7 +278,7 @@ router.get('/:organizationId/members', requireOrgContext, async (req, res) => {
         }
       },
       orderBy: { createdAt: 'asc' }
-    });
+    }));
 
     const result = members.map(m => ({
       id: m.id,
@@ -272,34 +308,50 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
   }
 
   try {
-    const targetMembership = await prisma.organizationMembership.findFirst({
-      where: { id: targetMemberId, organizationId: req.organizationId },
-      include: { user: true }
+    // Early returns become outcome values: a res.json inside the
+    // wrapper callback would double-send.
+    const lookup = await withRequestOrgContext(req, async (tx) => {
+      const targetMembership = await tx.organizationMembership.findFirst({
+        where: { id: targetMemberId, organizationId: req.organizationId },
+        include: { user: true }
+      });
+
+      if (!targetMembership) return { kind: 'not-found' };
+
+      // Role restrictions:
+      // 1. ADMIN cannot change an OWNER's role or promote someone to OWNER
+      if (req.orgRole === 'ADMIN') {
+        if (targetMembership.role === 'OWNER' || role === 'OWNER') {
+          return { kind: 'admin-owner' };
+        }
+      }
+
+      // 2. Prevent demoting the LAST owner of the organization
+      if (targetMembership.role === 'OWNER' && role !== 'OWNER') {
+        const ownerCount = await tx.organizationMembership.count({
+          where: { organizationId: req.organizationId, role: 'OWNER' }
+        });
+        if (ownerCount <= 1) {
+          return { kind: 'last-owner' };
+        }
+      }
+
+      return { kind: 'ok', targetMembership };
     });
 
-    if (!targetMembership) {
+    if (lookup.kind === 'not-found') {
       return res.status(404).json({ message: 'Member not found in this organization' });
     }
-
-    // Role restrictions:
-    // 1. ADMIN cannot change an OWNER's role or promote someone to OWNER
-    if (req.orgRole === 'ADMIN') {
-      if (targetMembership.role === 'OWNER' || role === 'OWNER') {
-        return res.status(403).json({ message: 'Only Organization Owners can assign or change Owner roles' });
-      }
+    if (lookup.kind === 'admin-owner') {
+      return res.status(403).json({ message: 'Only Organization Owners can assign or change Owner roles' });
     }
-
-    // 2. Prevent demoting the LAST owner of the organization
-    if (targetMembership.role === 'OWNER' && role !== 'OWNER') {
-      const ownerCount = await prisma.organizationMembership.count({
-        where: { organizationId: req.organizationId, role: 'OWNER' }
-      });
-      if (ownerCount <= 1) {
-        return res.status(400).json({ message: 'Cannot demote the final Owner. Assign another Owner first.' });
-      }
+    if (lookup.kind === 'last-owner') {
+      return res.status(400).json({ message: 'Cannot demote the final Owner. Assign another Owner first.' });
     }
+    const targetMembership = lookup.targetMembership;
 
     const updated = await prisma.$transaction(async (tx) => {
+      await setOrgContext(tx, req.organizationId, req.userId);
       // The owner count above is a fast path only: re-check it inside a
       // transaction holding a per-org advisory lock, so two concurrent
       // demotes cannot both observe 2 owners and leave the org ownerless.
@@ -348,32 +400,46 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
   if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
 
   try {
-    const targetMembership = await prisma.organizationMembership.findFirst({
-      where: { id: targetMemberId, organizationId: req.organizationId },
-      include: { user: true }
+    const lookup = await withRequestOrgContext(req, async (tx) => {
+      const targetMembership = await tx.organizationMembership.findFirst({
+        where: { id: targetMemberId, organizationId: req.organizationId },
+        include: { user: true }
+      });
+
+      if (!targetMembership) return { kind: 'not-found' };
+
+      // Role restrictions:
+      // ADMIN cannot remove an OWNER or another ADMIN
+      if (req.orgRole === 'ADMIN' && (targetMembership.role === 'OWNER' || targetMembership.role === 'ADMIN')) {
+        return { kind: 'admin-remove' };
+      }
+
+      // Prevent removing the final OWNER
+      if (targetMembership.role === 'OWNER') {
+        const ownerCount = await tx.organizationMembership.count({
+          where: { organizationId: req.organizationId, role: 'OWNER' }
+        });
+        if (ownerCount <= 1) {
+          return { kind: 'last-owner' };
+        }
+      }
+
+      return { kind: 'ok', targetMembership };
     });
 
-    if (!targetMembership) {
+    if (lookup.kind === 'not-found') {
       return res.status(404).json({ message: 'Member not found in this organization' });
     }
-
-    // Role restrictions:
-    // ADMIN cannot remove an OWNER or another ADMIN
-    if (req.orgRole === 'ADMIN' && (targetMembership.role === 'OWNER' || targetMembership.role === 'ADMIN')) {
+    if (lookup.kind === 'admin-remove') {
       return res.status(403).json({ message: 'Admins cannot remove Owners or other Admins' });
     }
-
-    // Prevent removing the final OWNER
-    if (targetMembership.role === 'OWNER') {
-      const ownerCount = await prisma.organizationMembership.count({
-        where: { organizationId: req.organizationId, role: 'OWNER' }
-      });
-      if (ownerCount <= 1) {
-        return res.status(400).json({ message: 'Cannot remove the final Owner of the organization' });
-      }
+    if (lookup.kind === 'last-owner') {
+      return res.status(400).json({ message: 'Cannot remove the final Owner of the organization' });
     }
+    const targetMembership = lookup.targetMembership;
 
     await prisma.$transaction(async (tx) => {
+      await setOrgContext(tx, req.organizationId, req.userId);
       // Same locked re-check as the demote path: the count above is a
       // fast path only — two concurrent removes must not both pass.
       if (targetMembership.role === 'OWNER') {
@@ -414,15 +480,16 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
   try {
     // The sole OWNER may not leave: the org would be left ownerless.
     if (req.orgRole === 'OWNER') {
-      const ownerCount = await prisma.organizationMembership.count({
+      const ownerCount = await withRequestOrgContext(req, (tx) => tx.organizationMembership.count({
         where: { organizationId: req.organizationId, role: 'OWNER' }
-      });
+      }));
       if (ownerCount <= 1) {
         return res.status(400).json({ message: 'Cannot leave as the sole owner — transfer ownership first' });
       }
     }
 
     await prisma.$transaction(async (tx) => {
+      await setOrgContext(tx, req.organizationId, req.userId);
       // Same locked re-check as the demote/remove paths: the count
       // above is a fast path only — two concurrent leaves must not
       // both pass and leave the org ownerless.
@@ -465,18 +532,28 @@ router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrg
   if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
 
   try {
-    const targetMembership = await prisma.organizationMembership.findFirst({
-      where: { id: targetMemberId, organizationId: req.organizationId },
-      include: { user: { select: { id: true, email: true, firstName: true, lastName: true } } }
+    const lookup = await withRequestOrgContext(req, async (tx) => {
+      const targetMembership = await tx.organizationMembership.findFirst({
+        where: { id: targetMemberId, organizationId: req.organizationId },
+        include: { user: { select: { id: true, email: true, firstName: true, lastName: true } } }
+      });
+
+      if (!targetMembership) return { kind: 'not-found' };
+
+      if (targetMembership.userId === req.userId) {
+        return { kind: 'self' };
+      }
+
+      return { kind: 'ok', targetMembership };
     });
 
-    if (!targetMembership) {
+    if (lookup.kind === 'not-found') {
       return res.status(404).json({ message: 'Member not found in this organization' });
     }
-
-    if (targetMembership.userId === req.userId) {
+    if (lookup.kind === 'self') {
       return res.status(400).json({ message: 'Cannot transfer ownership to yourself' });
     }
+    const targetMembership = lookup.targetMembership;
 
     const caller = await prisma.user.findUnique({
       where: { id: req.userId },
@@ -484,16 +561,18 @@ router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrg
     });
 
     // Atomic swap: target becomes OWNER, caller steps down to ADMIN.
-    await prisma.$transaction([
-      prisma.organizationMembership.update({
+    // Array-form $transaction cannot set RLS context, so callback form.
+    await prisma.$transaction(async (tx) => {
+      await setOrgContext(tx, req.organizationId, req.userId);
+      await tx.organizationMembership.update({
         where: { id: targetMembership.id },
         data: { role: 'OWNER' }
-      }),
-      prisma.organizationMembership.update({
+      });
+      await tx.organizationMembership.update({
         where: { id: req.orgMembership.id },
         data: { role: 'ADMIN' }
-      })
-    ]);
+      });
+    });
 
     await createAuditLog(
       req.organizationId,
@@ -538,69 +617,85 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
   const cleanEmail = email.trim().toLowerCase();
 
   try {
-    // Entitlement check: member limit counts current members PLUS
-    // outstanding PENDING invitations. Counting members alone lets an
-    // owner issue any number of invites while under the limit and grow
-    // the org past it at accept time (the accept path re-checks, but
-    // invites that can never be accepted should not be issued).
-    // Expired-but-unmarked invitations are excluded: they can never
-    // be accepted, the accept path flips them to EXPIRED.
-    const usage = await getOrgUsage(req.organizationId);
-    const pendingInvites = await prisma.organizationInvitation.count({
-      where: {
-        organizationId: req.organizationId,
-        status: 'PENDING',
-        expiresAt: { gt: new Date() }
+    // Early returns become outcome values: a res.json inside the
+    // wrapper callback would double-send. getOrgUsage takes the tx so
+    // its Subscription/Repository/Scan counts run in context.
+    const outcome = await withRequestOrgContext(req, async (tx) => {
+      // Entitlement check: member limit counts current members PLUS
+      // outstanding PENDING invitations. Counting members alone lets an
+      // owner issue any number of invites while under the limit and grow
+      // the org past it at accept time (the accept path re-checks, but
+      // invites that can never be accepted should not be issued).
+      // Expired-but-unmarked invitations are excluded: they can never
+      // be accepted, the accept path flips them to EXPIRED.
+      const usage = await getOrgUsage(req.organizationId, tx);
+      const pendingInvites = await tx.organizationInvitation.count({
+        where: {
+          organizationId: req.organizationId,
+          status: 'PENDING',
+          expiresAt: { gt: new Date() }
+        }
+      });
+      if (usage.usage.members.used + pendingInvites >= usage.usage.members.limit) {
+        return { kind: 'limit', usage };
       }
+
+      // Check if user is already a member (User has no RLS: plain client).
+      const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
+      if (existingUser) {
+        const existingMember = await tx.organizationMembership.findUnique({
+          where: {
+            userId_organizationId: {
+              userId: existingUser.id,
+              organizationId: req.organizationId
+            }
+          }
+        });
+        if (existingMember) {
+          return { kind: 'already-member' };
+        }
+      }
+
+      // Generate cryptographically secure random token and SHA-256 hash
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+      const invitation = await tx.organizationInvitation.create({
+        data: {
+          organizationId: req.organizationId,
+          invitedEmail: cleanEmail,
+          role: targetRole,
+          tokenHash: tokenHash,
+          expiresAt: expiresAt,
+          invitedById: req.userId,
+          status: 'PENDING'
+        }
+      });
+
+      return { kind: 'ok', invitation, rawToken };
     });
-    if (usage.usage.members.used + pendingInvites >= usage.usage.members.limit) {
+
+    if (outcome.kind === 'limit') {
       await createAuditLog(
         req.organizationId,
         req.userId,
         'USAGE_LIMIT_REACHED',
         'ORGANIZATION',
         String(req.organizationId),
-        { resource: 'MEMBER', limit: usage.usage.members.limit }
+        { resource: 'MEMBER', limit: outcome.usage.usage.members.limit }
       );
       return res.status(403).json({
         error: 'MEMBER_LIMIT_REACHED',
-        message: `Your organization has reached the limit of ${usage.usage.members.limit} team members on the ${usage.planName} plan. Upgrade to Pro for up to 15 members.`,
-        usage: usage.usage.members
+        message: `Your organization has reached the limit of ${outcome.usage.usage.members.limit} team members on the ${outcome.usage.planName} plan. Upgrade to Pro for up to 15 members.`,
+        usage: outcome.usage.usage.members
       });
     }
-
-    // Check if user is already a member
-    const existingUser = await prisma.user.findUnique({ where: { email: cleanEmail } });
-    if (existingUser) {
-      const existingMember = await prisma.organizationMembership.findUnique({
-        where: {
-          userId_organizationId: {
-            userId: existingUser.id,
-            organizationId: req.organizationId
-          }
-        }
-      });
-      if (existingMember) {
-        return res.status(400).json({ message: 'User is already a member of this organization' });
-      }
+    if (outcome.kind === 'already-member') {
+      return res.status(400).json({ message: 'User is already a member of this organization' });
     }
-
-    // Generate cryptographically secure random token and SHA-256 hash
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-    const invitation = await prisma.organizationInvitation.create({
-      data: {
-        organizationId: req.organizationId,
-        invitedEmail: cleanEmail,
-        role: targetRole,
-        tokenHash: tokenHash,
-        expiresAt: expiresAt,
-        invitedById: req.userId,
-        status: 'PENDING'
-      }
-    });
+    const invitation = outcome.invitation;
+    const rawToken = outcome.rawToken;
 
     await createAuditLog(
       req.organizationId,
@@ -659,13 +754,13 @@ router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['
 // ── GET /api/organizations/:id/invitations — List pending invitations ───────
 router.get('/:organizationId/invitations', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   try {
-    const invitations = await prisma.organizationInvitation.findMany({
+    const invitations = await withRequestOrgContext(req, (tx) => tx.organizationInvitation.findMany({
       where: {
         organizationId: req.organizationId,
         status: 'PENDING'
       },
       orderBy: { createdAt: 'desc' }
-    });
+    }));
 
     res.json(invitations.map(i => ({
       id: i.id,
@@ -687,16 +782,22 @@ router.delete('/:organizationId/invitations/:invitationId', requireOrgContext, r
   if (isNaN(invId)) return res.status(400).json({ message: 'Invalid invitation ID' });
 
   try {
-    const inv = await prisma.organizationInvitation.findFirst({
-      where: { id: invId, organizationId: req.organizationId }
+    const inv = await withRequestOrgContext(req, async (tx) => {
+      const found = await tx.organizationInvitation.findFirst({
+        where: { id: invId, organizationId: req.organizationId }
+      });
+
+      if (!found) return null;
+
+      await tx.organizationInvitation.update({
+        where: { id: found.id },
+        data: { status: 'REVOKED' }
+      });
+
+      return found;
     });
 
     if (!inv) return res.status(404).json({ message: 'Invitation not found' });
-
-    await prisma.organizationInvitation.update({
-      where: { id: inv.id },
-      data: { status: 'REVOKED' }
-    });
 
     await createAuditLog(
       req.organizationId,
@@ -717,14 +818,14 @@ router.delete('/:organizationId/invitations/:invitationId', requireOrgContext, r
 // ── GET /api/organizations/:id/audit-logs — Get audit log ────────────────────
 router.get('/:organizationId/audit-logs', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   try {
-    const logs = await prisma.auditLog.findMany({
+    const logs = await withRequestOrgContext(req, (tx) => tx.auditLog.findMany({
       where: { organizationId: req.organizationId },
       include: {
         actor: { select: { id: true, firstName: true, lastName: true, email: true } }
       },
       orderBy: { createdAt: 'desc' },
       take: 100
-    });
+    }));
 
     res.json(logs);
   } catch (err) {

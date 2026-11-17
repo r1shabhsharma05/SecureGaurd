@@ -3,6 +3,9 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+// SEC-31: Sbom is an RLS table — reads run in a context. createAuditLog
+// self-wraps, so the audit calls below stay as-is.
+const { withRequestOrgContext } = require('../utils/rlsContext');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -26,7 +29,7 @@ function downloadDisposition(sbom, suffix) {
 // GET /api/sboms — list all SBOMs for active organization
 router.get('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
   try {
-    const sboms = await prisma.sbom.findMany({
+    const sboms = await withRequestOrgContext(req, (tx) => tx.sbom.findMany({
       where: { organizationId: req.organizationId },
       include: {
         repository: { select: { id: true, name: true, fullName: true, platform: true } },
@@ -34,7 +37,7 @@ router.get('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), asyn
       },
       orderBy: { createdAt: 'desc' },
       take: 50
-    });
+    }));
 
     res.json(sboms);
   } catch (err) {
@@ -49,13 +52,13 @@ router.get('/:id', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), a
   if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
-    const sbom = await prisma.sbom.findFirst({
+    const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
       where: { id: sbomId, organizationId: req.organizationId },
       include: {
         repository: { select: { id: true, name: true, fullName: true, platform: true, url: true } },
         scan: { select: { id: true, branch: true, commitSha: true, createdAt: true } }
       }
-    });
+    }));
 
     if (!sbom) {
       return res.status(404).json({ message: 'SBOM not found in active organization' });
@@ -83,9 +86,9 @@ router.get('/:id/download', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDI
   if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
-    const sbom = await prisma.sbom.findFirst({
+    const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
       where: { id: sbomId, organizationId: req.organizationId }
-    });
+    }));
 
     if (!sbom) {
       return res.status(404).json({ message: 'SBOM not found in active organization' });
@@ -118,9 +121,9 @@ router.get('/:id/cyclonedx', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUD
   if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
-    const sbom = await prisma.sbom.findFirst({
+    const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
       where: { id: sbomId, organizationId: req.organizationId }
-    });
+    }));
     if (!sbom) return res.status(404).json({ message: 'SBOM not found in active organization' });
     if (!sbom.cycloneDxDoc) {
       return res.status(404).json({ message: 'No CycloneDX document stored for this SBOM (generated before CycloneDX support — rescan to create one)' });
@@ -154,9 +157,9 @@ router.get('/:id/threat-intel', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', '
   if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
-    const sbom = await prisma.sbom.findFirst({
+    const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
       where: { id: sbomId, organizationId: req.organizationId }
-    });
+    }));
     if (!sbom) return res.status(404).json({ message: 'SBOM not found in active organization' });
 
     // Component list: CycloneDX when stored, else the SPDX packages
@@ -201,14 +204,14 @@ router.get('/repository/:repositoryId', requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
   if (isNaN(repositoryId)) return res.status(400).json({ message: 'Invalid repository ID' });
 
   try {
-    const sbom = await prisma.sbom.findFirst({
+    const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
       where: { repositoryId, organizationId: req.organizationId },
       include: {
         repository: { select: { id: true, name: true, fullName: true, platform: true } },
         scan: { select: { id: true, branch: true, commitSha: true, createdAt: true } }
       },
       orderBy: { createdAt: 'desc' }
-    });
+    }));
 
     if (!sbom) {
       return res.status(404).json({ message: 'No SBOM found for this repository' });

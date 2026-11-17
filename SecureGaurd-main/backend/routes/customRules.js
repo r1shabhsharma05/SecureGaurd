@@ -11,6 +11,10 @@ const { runSecurityScan, BUILTIN_RULES } = require('../utils/securityScanner');
 const { IAC_RULES } = require('../utils/rules/iacRules');
 const { API_RULES } = require('../utils/rules/apiRules');
 const { resolveScanTarget } = require('../utils/repoScanSource');
+// SEC-31: CustomRule/Scan are RLS tables — every read/write runs in a
+// context. loadRule's findFirst is wrapped the same way (it still sends
+// its own 404/400 and returns null on failure).
+const { withRequestOrgContext } = require('../utils/rlsContext');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -113,10 +117,10 @@ router.get('/library', async (req, res) => {
 // GET /api/custom-rules — list this org's rules (any member).
 router.get('/', async (req, res) => {
   try {
-    const rows = await prisma.customRule.findMany({
+    const rows = await withRequestOrgContext(req, (tx) => tx.customRule.findMany({
       where: { organizationId: req.organizationId },
       orderBy: { ruleId: 'asc' },
-    });
+    }));
     res.json(rows.map(publicCustomRule));
   } catch (err) {
     console.error('Error listing custom rules:', err);
@@ -129,7 +133,7 @@ router.get('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ message: 'Invalid rule ID' });
   try {
-    const row = await prisma.customRule.findFirst({ where: { id, organizationId: req.organizationId } });
+    const row = await withRequestOrgContext(req, (tx) => tx.customRule.findFirst({ where: { id, organizationId: req.organizationId } }));
     if (!row) return res.status(404).json({ message: 'Custom rule not found' });
     res.json(publicCustomRule(row));
   } catch (err) {
@@ -144,7 +148,7 @@ async function loadRule(req, res) {
     res.status(400).json({ message: 'Invalid rule ID' });
     return null;
   }
-  const row = await prisma.customRule.findFirst({ where: { id, organizationId: req.organizationId } });
+  const row = await withRequestOrgContext(req, (tx) => tx.customRule.findFirst({ where: { id, organizationId: req.organizationId } }));
   if (!row) {
     res.status(404).json({ message: 'Custom rule not found' });
     return null;
@@ -181,17 +185,17 @@ router.post('/', requireOrgRole(WRITE_ROLES), async (req, res) => {
     return res.status(400).json({ message: err.message });
   }
   try {
-    const count = await prisma.customRule.count({ where: { organizationId: req.organizationId } });
+    const count = await withRequestOrgContext(req, (tx) => tx.customRule.count({ where: { organizationId: req.organizationId } }));
     if (count >= MAX_RULES_PER_ORG) {
       return res.status(400).json({ message: `Organization already has the maximum of ${MAX_RULES_PER_ORG} custom rules` });
     }
-    const existing = await prisma.customRule.findFirst({
+    const existing = await withRequestOrgContext(req, (tx) => tx.customRule.findFirst({
       where: { organizationId: req.organizationId, ruleId: parsed.id },
-    });
+    }));
     if (existing) return res.status(409).json({ message: `A rule with id ${parsed.id} already exists in this organization` });
-    const row = await prisma.customRule.create({
+    const row = await withRequestOrgContext(req, (tx) => tx.customRule.create({
       data: ruleDataFromParsed(parsed, req.organizationId, req.userId),
-    });
+    }));
     await createAuditLog(req.organizationId, req.userId, 'CUSTOM_RULE_CREATED', 'CUSTOM_RULE', String(row.id), { ruleId: row.ruleId, title: row.title });
     res.status(201).json(publicCustomRule(row));
   } catch (err) {
@@ -217,15 +221,15 @@ router.patch('/:id', requireOrgRole(WRITE_ROLES), async (req, res) => {
       if (parsed.id !== row.ruleId) {
         return res.status(400).json({ message: `Rule id is immutable: YAML id ${parsed.id} does not match stored rule ${row.ruleId}` });
       }
-      const updated = await prisma.customRule.update({
+      const updated = await withRequestOrgContext(req, (tx) => tx.customRule.update({
         where: { id: row.id },
         data: ruleDataFromParsed(parsed, req.organizationId, row.createdById),
-      });
+      }));
       await createAuditLog(req.organizationId, req.userId, 'CUSTOM_RULE_UPDATED', 'CUSTOM_RULE', String(row.id), { ruleId: row.ruleId });
       return res.json(publicCustomRule(updated));
     }
     if (typeof enabled === 'boolean') {
-      const updated = await prisma.customRule.update({ where: { id: row.id }, data: { enabled } });
+      const updated = await withRequestOrgContext(req, (tx) => tx.customRule.update({ where: { id: row.id }, data: { enabled } }));
       await createAuditLog(req.organizationId, req.userId, 'CUSTOM_RULE_UPDATED', 'CUSTOM_RULE', String(row.id), { ruleId: row.ruleId, enabled });
       return res.json(publicCustomRule(updated));
     }
@@ -242,7 +246,7 @@ router.delete('/:id', requireOrgRole(WRITE_ROLES), async (req, res) => {
   try {
     const row = await loadRule(req, res);
     if (!row) return;
-    await prisma.customRule.delete({ where: { id: row.id } });
+    await withRequestOrgContext(req, (tx) => tx.customRule.delete({ where: { id: row.id } }));
     await createAuditLog(req.organizationId, req.userId, 'CUSTOM_RULE_DELETED', 'CUSTOM_RULE', String(row.id), { ruleId: row.ruleId });
     res.status(204).end();
   } catch (err) {
@@ -293,10 +297,10 @@ router.post('/:id/test-scan', requireOrgRole(WRITE_ROLES), async (req, res) => {
     if (!row) return;
     const scanId = parseInt(req.body?.scanId, 10);
     if (isNaN(scanId)) return res.status(400).json({ message: 'scanId is required' });
-    const scan = await prisma.scan.findFirst({
+    const scan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { id: scanId, organizationId: req.organizationId },
       include: { repository: true },
-    });
+    }));
     if (!scan) return res.status(404).json({ message: 'Scan not found in this organization' });
     try {
       scanTarget = resolveScanTarget(scan.repository);

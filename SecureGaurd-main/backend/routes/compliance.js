@@ -5,6 +5,9 @@ const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { evaluateCompliance } = require('../services/complianceEngine');
 const { generateCompliancePdf } = require('../utils/pdfGenerator');
+// SEC-31: Repository/Vulnerability/ComplianceReport are RLS tables —
+// every read/write runs in a context. createAuditLog self-wraps.
+const { withRequestOrgContext } = require('../utils/rlsContext');
 
 // All compliance routes require authentication & organization context
 router.use(authMiddleware);
@@ -59,12 +62,12 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
 
     // Authorization check: repository must belong to active organization
     const parsedRepoId = Number(repositoryId);
-    const repo = await prisma.repository.findFirst({
+    const repo = await withRequestOrgContext(req, (tx) => tx.repository.findFirst({
       where: {
         id: parsedRepoId,
         organizationId: req.organizationId
       }
-    });
+    }));
 
     if (!repo) {
       return res.status(404).json({ message: 'Repository not found or unauthorized' });
@@ -79,7 +82,7 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
       return res.status(400).json({ message: dateErr.message });
     }
 
-    const vulnerabilities = await prisma.vulnerability.findMany({
+    const vulnerabilities = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where: {
         scan: {
           repositoryId: repo.id,
@@ -90,7 +93,7 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
         }
       },
       orderBy: { createdAt: 'desc' }
-    });
+    }));
 
     const reportData = evaluateCompliance({
       framework: frameworkKey,
@@ -102,7 +105,7 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
 
     const finalReportName = sanitizedReportName || `${frameworkKey} Compliance Report - ${repo.name}`;
 
-    const report = await prisma.complianceReport.create({
+    const report = await withRequestOrgContext(req, (tx) => tx.complianceReport.create({
       data: {
         userId: req.userId,
         organizationId: req.organizationId,
@@ -129,7 +132,7 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
           select: { id: true, name: true, fullName: true, platform: true }
         }
       }
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,
@@ -150,7 +153,7 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
 // GET /api/compliance/reports — List all compliance reports for active organization
 router.get('/reports', async (req, res) => {
   try {
-    const reports = await prisma.complianceReport.findMany({
+    const reports = await withRequestOrgContext(req, (tx) => tx.complianceReport.findMany({
       where: {
         organizationId: req.organizationId
       },
@@ -160,7 +163,7 @@ router.get('/reports', async (req, res) => {
         }
       },
       orderBy: { createdAt: 'desc' }
-    });
+    }));
 
     res.json(reports);
   } catch (err) {
@@ -177,7 +180,7 @@ router.get('/reports/:id', async (req, res) => {
   }
 
   try {
-    const report = await prisma.complianceReport.findFirst({
+    const report = await withRequestOrgContext(req, (tx) => tx.complianceReport.findFirst({
       where: {
         id: reportId,
         organizationId: req.organizationId
@@ -187,7 +190,7 @@ router.get('/reports/:id', async (req, res) => {
           select: { id: true, name: true, fullName: true, platform: true, url: true }
         }
       }
-    });
+    }));
 
     if (!report) {
       return res.status(404).json({ message: 'Compliance report not found' });
@@ -208,7 +211,7 @@ router.get('/reports/:id/pdf', async (req, res) => {
   }
 
   try {
-    const report = await prisma.complianceReport.findFirst({
+    const report = await withRequestOrgContext(req, (tx) => tx.complianceReport.findFirst({
       where: {
         id: reportId,
         organizationId: req.organizationId
@@ -216,7 +219,7 @@ router.get('/reports/:id/pdf', async (req, res) => {
       include: {
         repository: true
       }
-    });
+    }));
 
     if (!report) {
       return res.status(404).json({ message: 'Compliance report not found' });
@@ -247,7 +250,7 @@ router.get('/reports/:id/json', async (req, res) => {
   }
 
   try {
-    const report = await prisma.complianceReport.findFirst({
+    const report = await withRequestOrgContext(req, (tx) => tx.complianceReport.findFirst({
       where: {
         id: reportId,
         organizationId: req.organizationId
@@ -257,7 +260,7 @@ router.get('/reports/:id/json', async (req, res) => {
           select: { id: true, name: true, fullName: true, platform: true }
         }
       }
-    });
+    }));
 
     if (!report) {
       return res.status(404).json({ message: 'Compliance report not found' });
@@ -282,20 +285,20 @@ router.delete('/reports/:id', requireOrgRole(['OWNER', 'ADMIN']), async (req, re
   }
 
   try {
-    const report = await prisma.complianceReport.findFirst({
+    const report = await withRequestOrgContext(req, (tx) => tx.complianceReport.findFirst({
       where: {
         id: reportId,
         organizationId: req.organizationId
       }
-    });
+    }));
 
     if (!report) {
       return res.status(404).json({ message: 'Compliance report not found' });
     }
 
-    await prisma.complianceReport.delete({
+    await withRequestOrgContext(req, (tx) => tx.complianceReport.delete({
       where: { id: report.id }
-    });
+    }));
 
     await createAuditLog(
       req.organizationId,

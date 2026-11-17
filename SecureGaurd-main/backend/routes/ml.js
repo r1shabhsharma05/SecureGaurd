@@ -3,6 +3,8 @@ const router = express.Router();
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext } = require('../middleware/rbac');
 const prisma = require('../prismaClient');
+// SEC-31: Vulnerability is an RLS table — reads run in a context.
+const { withRequestOrgContext } = require('../utils/rlsContext');
 
 // Versioned ML API (v2). v1 (/api/classifier) proxies the FP classifier's
 // /classify endpoints; v2 serves the severity-priority ranker (/v2/rank).
@@ -68,10 +70,10 @@ router.post('/rank', authMiddleware, requireOrgContext, async (req, res) => {
 
   let vulns;
   try {
-    vulns = await prisma.vulnerability.findMany({
+    vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where: { id: { in: ids }, scan: { organizationId: req.organizationId } },
       select: { id: true, cweId: true, mlFeatures: true },
-    });
+    }));
   } catch (err) {
     return res.status(500).json({ message: 'Server error' });
   }
