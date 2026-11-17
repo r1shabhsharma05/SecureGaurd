@@ -11,6 +11,7 @@ const {
   assertContextId,
   setOrgContext,
   setUserContext,
+  setOrgOnlyContext,
   createRlsContext,
   rlsContextMiddleware,
   getRequestContext,
@@ -106,6 +107,41 @@ test('withOrgContext rejects invalid ids without opening a transaction', async (
   const { withOrgContext } = createRlsContext(client);
   await assert.rejects(() => withOrgContext('9x', 3, async () => {}), /Invalid RLS context/);
   assert.equal(opened, false);
+});
+
+test('setOrgOnlyContext issues exactly one SET LOCAL, org only (rule 6)', async () => {
+  const tx = mockTx();
+  await setOrgOnlyContext(tx, 12);
+  assert.equal(tx.calls.length, 1);
+  assert.match(tx.calls[0].sql, /set_config\('app\.current_org_id', \?, true\)/);
+  assert.deepEqual(tx.calls[0].params, ['12']);
+});
+
+test('setOrgOnlyContext throws before any SQL when the org id is invalid', async () => {
+  const tx = mockTx();
+  await assert.rejects(() => setOrgOnlyContext(tx, '12abc'), /Invalid RLS context/);
+  assert.equal(tx.calls.length, 0);
+});
+
+test('withOrgOnlyContext opens a transaction, sets only the org variable', async () => {
+  const tx = mockTx();
+  const { withOrgOnlyContext } = createRlsContext(mockClient(tx));
+  let seenTx = null;
+  const out = await withOrgOnlyContext(9, async (t) => { seenTx = t; return 'ok'; });
+  assert.equal(out, 'ok');
+  assert.equal(seenTx, tx);
+  assert.equal(tx.calls.length, 1); // org only — no user variable
+  assert.match(tx.calls[0].sql, /app\.current_org_id/);
+});
+
+test('resolveOrgIdForInvitationAny passes the secret through and returns the id', async () => {
+  const tx = mockTx({ orgId: 55 });
+  const ctx = createRlsContext(mockClient(tx));
+  assert.equal(await ctx.resolveOrgIdForInvitationAny(tx, 'deadbeef'), 55);
+  assert.match(tx.calls[0].sql, /app_org_id_for_invitation_any\(\?\)/);
+  assert.deepEqual(tx.calls[0].params, ['deadbeef']);
+  assert.equal(await ctx.resolveOrgIdForInvitationAny(tx, ''), null); // empty secret: no query
+  assert.equal(tx.calls.length, 1);
 });
 
 test('withUserContext sets only the user variable', async () => {

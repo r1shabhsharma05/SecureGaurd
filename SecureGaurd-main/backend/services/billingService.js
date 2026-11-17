@@ -36,13 +36,18 @@ async function getPlanPrices() {
  * Ensures an organization has a Subscription record.
  * Auto-creates a FREE plan subscription if none exists (backwards compatibility).
  */
-async function getOrgSubscription(organizationId) {
+async function getOrgSubscription(organizationId, tx = null) {
+  // SEC-31: tenant-table reads/writes must run inside the caller's RLS
+  // transaction (withOrgContext). Callers inside a request pass tx; a null
+  // tx falls back to the plain client (pre-migration behaviour — post-
+  // migration it returns zero rows, fail closed, never another org's rows).
+  const db = tx || prisma;
   const orgId = Number(organizationId);
   if (!orgId || isNaN(orgId)) {
     throw new Error('Invalid organizationId provided to billingService');
   }
 
-  let sub = await prisma.subscription.findUnique({
+  let sub = await db.subscription.findUnique({
     where: { organizationId: orgId }
   });
 
@@ -50,7 +55,7 @@ async function getOrgSubscription(organizationId) {
     const now = new Date();
     const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
 
-    sub = await prisma.subscription.create({
+    sub = await db.subscription.create({
       data: {
         organizationId: orgId,
         plan: 'FREE',
@@ -69,8 +74,8 @@ async function getOrgSubscription(organizationId) {
  * Gets the active Plan configuration for an Organization.
  * Falls back to FREE if subscription is inactive or canceled beyond grace period.
  */
-async function getOrgPlan(organizationId) {
-  const sub = await getOrgSubscription(organizationId);
+async function getOrgPlan(organizationId, tx = null) {
+  const sub = await getOrgSubscription(organizationId, tx);
 
   // Check if status is valid
   const validStatuses = ['active', 'trialing'];
@@ -87,10 +92,11 @@ async function getOrgPlan(organizationId) {
  * Calculates current period usage for an Organization.
  * Counts scans in current month/billing period, total repositories, and total members.
  */
-async function getOrgUsage(organizationId) {
+async function getOrgUsage(organizationId, tx = null) {
+  const db = tx || prisma;
   const orgId = Number(organizationId);
-  const sub = await getOrgSubscription(orgId);
-  const plan = await getOrgPlan(orgId);
+  const sub = await getOrgSubscription(orgId, tx);
+  const plan = await getOrgPlan(orgId, tx);
 
   // Determine period boundaries
   const now = new Date();
@@ -98,17 +104,17 @@ async function getOrgUsage(organizationId) {
   const endOfPeriod = sub.currentPeriodEnd || new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
   // 1. Repositories count
-  const reposCount = await prisma.repository.count({
+  const reposCount = await db.repository.count({
     where: { organizationId: orgId }
   });
 
   // 2. Members count
-  const membersCount = await prisma.organizationMembership.count({
+  const membersCount = await db.organizationMembership.count({
     where: { organizationId: orgId }
   });
 
   // 3. Scans count in current period
-  const scansCount = await prisma.scan.count({
+  const scansCount = await db.scan.count({
     where: {
       organizationId: orgId,
       createdAt: {
@@ -151,8 +157,8 @@ async function getOrgUsage(organizationId) {
 /**
  * Checks if organization can add a new repository.
  */
-async function checkCanAddRepository(organizationId) {
-  const usage = await getOrgUsage(organizationId);
+async function checkCanAddRepository(organizationId, tx = null) {
+  const usage = await getOrgUsage(organizationId, tx);
   if (usage.usage.repositories.used >= usage.usage.repositories.limit) {
     return {
       allowed: false,
@@ -167,8 +173,8 @@ async function checkCanAddRepository(organizationId) {
 /**
  * Checks if organization can invite/add a new member.
  */
-async function checkCanInviteMember(organizationId) {
-  const usage = await getOrgUsage(organizationId);
+async function checkCanInviteMember(organizationId, tx = null) {
+  const usage = await getOrgUsage(organizationId, tx);
   if (usage.usage.members.used >= usage.usage.members.limit) {
     return {
       allowed: false,
@@ -183,8 +189,8 @@ async function checkCanInviteMember(organizationId) {
 /**
  * Checks if organization can trigger a new scan.
  */
-async function checkCanTriggerScan(organizationId) {
-  const usage = await getOrgUsage(organizationId);
+async function checkCanTriggerScan(organizationId, tx = null) {
+  const usage = await getOrgUsage(organizationId, tx);
   if (usage.usage.scans.used >= usage.usage.scans.limit) {
     return {
       allowed: false,

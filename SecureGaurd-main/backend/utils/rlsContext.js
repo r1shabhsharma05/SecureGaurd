@@ -44,6 +44,11 @@
  *    nested helpers can read them; it does NOT set the DB variables and
  *    must never be mistaken for enforcement. Enforcement happens only
  *    inside withOrgContext/withUserContext transactions.
+ * 6. Resolver flows with NO authenticated user (invitation inspect,
+ *    provider webhooks) use withOrgOnlyContext: the org id comes from a
+ *    SECURITY DEFINER resolver keyed by a secret, and the policies that
+ *    matter there check the org variable only. Never use it where a user
+ *    id exists — withOrgContext is the rule then.
  *
  * ROLLOUT ORDER (see the migration header): deploy this file + convert
  * call sites FIRST, then apply the migration. Applying the migration
@@ -102,6 +107,13 @@ async function setUserContext(tx, userId) {
   await tx.$executeRaw`SELECT set_config('app.current_user_id', ${String(user)}, true)`;
 }
 
+/** Set only the org variable (resolver flows with no authenticated user — rule 6). */
+async function setOrgOnlyContext(tx, orgId) {
+  const org = parseContextId(orgId);
+  if (org === null) throw new Error('Invalid RLS context: organizationId must be a positive integer');
+  await tx.$executeRaw`SELECT set_config('app.current_org_id', ${String(org)}, true)`;
+}
+
 /**
  * Run `fn(tx)` inside an interactive transaction with both RLS variables
  * set. `fn` receives the transaction client — use it for every query.
@@ -125,6 +137,15 @@ function createRlsContext(client) {
     });
   }
 
+  /** Run `fn(tx)` with only the org variable set (rule 6 — no user). */
+  async function withOrgOnlyContext(orgId, fn) {
+    const org = assertContextId(orgId, 'organizationId');
+    return client.$transaction(async (tx) => {
+      await setOrgOnlyContext(tx, org);
+      return fn(tx);
+    });
+  }
+
   /** Convenience wrapper reading the ids off the request (after auth + requireOrgContext). */
   async function withRequestOrgContext(req, fn) {
     return withOrgContext(req.organizationId, req.userId, fn);
@@ -137,6 +158,17 @@ function createRlsContext(client) {
   async function resolveOrgIdForInvitation(tx, tokenHash) {
     if (typeof tokenHash !== 'string' || tokenHash.length === 0) return null;
     const rows = await tx.$queryRaw`SELECT app_org_id_for_invitation(${tokenHash}) AS "orgId"`;
+    const id = rows?.[0]?.orgId;
+    return parseContextId(id);
+  }
+
+  // Any-status variant (migration §5): resolves the org for an invitation
+  // in ANY status — the inspect/accept handlers must tell PENDING apart
+  // from ACCEPTED/EXPIRED, and the PENDING-only resolver collapses those
+  // to "not found". Same secret key, same return shape (org id only).
+  async function resolveOrgIdForInvitationAny(tx, tokenHash) {
+    if (typeof tokenHash !== 'string' || tokenHash.length === 0) return null;
+    const rows = await tx.$queryRaw`SELECT app_org_id_for_invitation_any(${tokenHash}) AS "orgId"`;
     const id = rows?.[0]?.orgId;
     return parseContextId(id);
   }
@@ -168,8 +200,10 @@ function createRlsContext(client) {
   return {
     withOrgContext,
     withUserContext,
+    withOrgOnlyContext,
     withRequestOrgContext,
     resolveOrgIdForInvitation,
+    resolveOrgIdForInvitationAny,
     resolveOrgIdForRazorpaySubscription,
     resolveOrgIdForStripeSubscription,
     resolveOrgIdForRepository,
@@ -200,6 +234,7 @@ module.exports = {
   assertContextId,
   setOrgContext,
   setUserContext,
+  setOrgOnlyContext,
   createRlsContext,
   rlsContextMiddleware,
   getRequestContext,

@@ -11,9 +11,14 @@ const { decrypt } = require('./cryptoUtils');
 const { sendMail, isMailConfigured } = require('./mailer');
 const { isValidSlackWebhookUrl, maskWebhookUrl, buildSlackPayload, buildEmailAlert } = require('./alertPayload');
 
-async function logAttempt({ organizationId, channel, event, targetMasked, status, providerId, error }) {
+// SEC-31: AlertLog/AlertSetting/Organization(Membership) are RLS tables.
+// Callers inside an RLS transaction pass tx; without one the plain client
+// is used (pre-migration behaviour — post-migration it returns zero rows,
+// fail closed, never another org's rows).
+async function logAttempt({ organizationId, channel, event, targetMasked, status, providerId, error, db }) {
+  const client = db || prisma;
   try {
-    await prisma.alertLog.create({
+    await client.alertLog.create({
       data: {
         organizationId,
         channel,
@@ -59,11 +64,12 @@ async function sendSlackAlert(webhookUrl, payload) {
   }
 }
 
-async function dispatchScanAlerts({ organizationId, scan, repository }) {
+async function dispatchScanAlerts({ organizationId, scan, repository, tx = null }) {
+  const db = tx || prisma;
   const results = [];
   let setting;
   try {
-    setting = await prisma.alertSetting.findUnique({ where: { organizationId } });
+    setting = await db.alertSetting.findUnique({ where: { organizationId } });
   } catch (err) {
     console.error('[scanAlerts] settings lookup failed:', err.message);
     return results;
@@ -76,7 +82,7 @@ async function dispatchScanAlerts({ organizationId, scan, repository }) {
     : (setting.notifyOnScanComplete ? 'scan_completed' : null);
   if (!event) return results;
 
-  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
+  const org = await db.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
   const base = {
     orgName: org ? org.name : `Organization ${organizationId}`,
     repoName: repository ? (repository.fullName || repository.name) : 'repository',
@@ -92,6 +98,7 @@ async function dispatchScanAlerts({ organizationId, scan, repository }) {
     const url = decrypt(setting.slackWebhookUrl);
     const outcome = await sendSlackAlert(url, buildSlackPayload(base));
     await logAttempt({
+      db,
       organizationId,
       channel: 'slack',
       event,
@@ -104,10 +111,10 @@ async function dispatchScanAlerts({ organizationId, scan, repository }) {
 
   if (setting.emailEnabled) {
     if (!isMailConfigured()) {
-      await logAttempt({ organizationId, channel: 'email', event, status: 'failed', error: 'No mail transport configured (BREVO_API_KEY / SMTP)' });
+      await logAttempt({ db, organizationId, channel: 'email', event, status: 'failed', error: 'No mail transport configured (BREVO_API_KEY / SMTP)' });
       results.push({ channel: 'email', ok: false });
     } else {
-      const members = await prisma.organizationMembership.findMany({
+      const members = await db.organizationMembership.findMany({
         where: { organizationId },
         include: { user: { select: { email: true } } },
       });
@@ -119,14 +126,14 @@ async function dispatchScanAlerts({ organizationId, scan, repository }) {
           const providerId = await sendMail({ to, subject: mail.subject, text: mail.text });
           const delivered = providerId !== false;
           await logAttempt({
-            organizationId, channel: 'email', event, targetMasked: to,
+            db, organizationId, channel: 'email', event, targetMasked: to,
             status: delivered ? 'delivered' : 'failed',
             providerId: delivered && providerId !== true ? providerId : null,
             error: delivered ? null : 'Mail transport refused the message',
           });
           results.push({ channel: 'email', ok: delivered, to });
         } catch (err) {
-          await logAttempt({ organizationId, channel: 'email', event, targetMasked: to, status: 'failed', error: err.message });
+          await logAttempt({ db, organizationId, channel: 'email', event, targetMasked: to, status: 'failed', error: err.message });
           results.push({ channel: 'email', ok: false, to });
         }
       }

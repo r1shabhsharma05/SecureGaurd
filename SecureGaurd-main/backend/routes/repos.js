@@ -3,6 +3,12 @@ const router = express.Router();
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+// SEC-31: every Repository/AuditLog query must run with RLS context set.
+// Plain reads/writes go through withRequestOrgContext (tx replaces prisma);
+// the POST handler's existing $transaction sets the context inside it
+// instead (no nested transactions). createAuditLog self-wraps when called
+// without a tx.
+const { withRequestOrgContext, setOrgContext } = require('../utils/rlsContext');
 const { checkCanAddRepository } = require('../services/billingService');
 const { getPlanConfig } = require('../config/plans');
 const { generateWebhookSecret } = require('./integration');
@@ -23,7 +29,7 @@ router.use(requireOrgContext);
 // GET /api/repos — list all repos for the active organization
 router.get('/', async (req, res) => {
   try {
-    const repos = await prisma.repository.findMany({
+    const repos = await withRequestOrgContext(req, (tx) => tx.repository.findMany({
       where: { organizationId: req.organizationId },
       include: {
         scans: {
@@ -33,7 +39,7 @@ router.get('/', async (req, res) => {
         _count: { select: { scans: true } },
       },
       orderBy: { updatedAt: 'desc' },
-    });
+    }));
     // Never leak the per-repo webhook secret in the list response: it is
     // returned once, at creation, and is a credential after that.
     res.json(repos.map(({ webhookSecret, ...repo }) => repo));
@@ -60,7 +66,10 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, re
   try {
     // Entitlement Check: Repository Limit (fast path; the authoritative
     // check is re-run under the per-org lock inside the transaction below).
-    const limitCheck = await checkCanAddRepository(req.organizationId);
+    // Runs in its own short RLS transaction — the limit counts are
+    // tenant-table reads and must not run context-free.
+    const limitCheck = await withRequestOrgContext(req, (tx) =>
+      checkCanAddRepository(req.organizationId, tx));
     if (!limitCheck.allowed) {
       await createAuditLog(
         req.organizationId,
@@ -82,6 +91,9 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, re
     // transactions could both count below the limit before either inserts;
     // the lock is what makes the check atomic.
     const repo = await prisma.$transaction(async (tx) => {
+      // RLS context inside the existing transaction (no nesting):
+      // the advisory lock + re-check + insert below all need it.
+      await setOrgContext(tx, req.organizationId, req.userId);
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(${req.organizationId}::bigint)`;
       const sub = await tx.subscription.findUnique({
         where: { organizationId: req.organizationId },
@@ -156,12 +168,15 @@ router.delete('/:id', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   if (isNaN(repoId)) return res.status(400).json({ message: 'Invalid repository ID' });
 
   try {
-    const repo = await prisma.repository.findFirst({
-      where: { id: repoId, organizationId: req.organizationId },
+    const repo = await withRequestOrgContext(req, async (tx) => {
+      const found = await tx.repository.findFirst({
+        where: { id: repoId, organizationId: req.organizationId },
+      });
+      if (!found) return null;
+      await tx.repository.delete({ where: { id: found.id } });
+      return found;
     });
     if (!repo) return res.status(404).json({ message: 'Repository not found' });
-
-    await prisma.repository.delete({ where: { id: repo.id } });
 
     await createAuditLog(
       req.organizationId,
