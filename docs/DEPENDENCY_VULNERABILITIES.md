@@ -1,11 +1,15 @@
 # Dependency Vulnerabilities — SEC-13
 
-Scan date: **2026-11-17 ~01:02 IST** (2026-11-16 19:32 UTC) — re-run, Day 4.
-Previous scan: 2026-11-16 ~01:26 IST (15 findings, same set — advisory IDs
-identical, verified by comparing the two raw JSON files).
-Status: **measured, not clean** — 15 findings, 0 critical, 3 high. Fixes are
-listed below; none have been applied yet (this unit does not modify
-`package.json` / `package-lock.json`). Remediation is Day 9 work.
+Scan date: **2026-11-18 ~02:30 IST** (gate-pass run).
+Previous scans: 2026-11-17 ~01:02 IST (15 findings, 0 critical, 3 high);
+2026-11-16 ~01:26 IST (15 findings, same set).
+Status: **remediation done for the gate blockers** — 3 findings remain,
+0 critical, **1 high** (picomatch — no fixed version exists; see below),
+2 moderate (major-bump fixes, Day 9). The 3 HIGHs from 17 Nov are all
+fixed by the upgrades in this run; 9 further findings (fast-uri ×5,
+ip-address ×3, qs ×1) are also fixed. Full detail of the 17 Nov baseline
+is kept below the 18 Nov section — do not hand-edit the tables; re-run
+the scan instead.
 
 ## Method
 
@@ -21,28 +25,29 @@ instead with the OSV API, which is reachable from the VM:
   then enriches each hit with a full `GET /v1/vulns/{id}` — the
   querybatch response carries only id + modified, so severity, summary
   and fixed versions come from the per-vulnerability lookup.
-- Raw results JSON (569 packages, 15 findings with full OSV records):
-  `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/osv-scan-results-2026-11-17.json`
+- Raw results JSON (568 packages, 3 findings with full OSV records):
+  `~/workspace/goals/securegaurd-20-day-transformation/hidden_files/osv-scan-results-2026-11-18.json`
   (kept out of the repo; `osv-scan-results.json` is gitignored). Previous
-  run: `.../osv-scan-results-2026-11-16.json` (585 packages).
+  runs: `.../osv-scan-results-2026-11-17.json` (569 packages, 15 findings),
+  `.../osv-scan-results-2026-11-16.json` (585 packages, 15 findings).
 - Scope: **direct + transitive** dependencies, as pinned in the lockfiles.
   OSV matching is version-based (the vulnerable version is present in the
   tree); it is NOT a reachability/exploitability analysis for this app.
   A finding means "this version is installed", not "this app is
   exploitable through it".
 
-## Totals
+## Totals (2026-11-18 re-scan, after remediation)
 
 | | Count |
 |---|---|
-| Unique `package@version` pairs scanned | 569 (585 on 2026-11-16 — lockfiles shrank after the mongoose removal) |
+| Unique `package@version` pairs scanned | 568 (569 on 2026-11-17, 585 on 2026-11-16) |
 | Lockfiles | `SecureGaurd-main/package-lock.json` (250 entries), `SecureGaurd-main/backend/package-lock.json` (353 entries) |
-| Vulnerable packages | 8 (all transitive — none is a direct dependency) |
-| Total findings | 15 |
+| Vulnerable packages | 3 (all transitive — none is a direct dependency) |
+| Total findings | 3 |
 | Critical | 0 |
-| High | 3 |
-| Moderate | 10 |
-| Low | 2 |
+| High | 1 |
+| Moderate | 2 |
+| Low | 0 |
 
 Severity labels are the **GitHub severity** published on each advisory
 as carried by OSV (`database_specific.severity`); the CVSS vector for
@@ -52,10 +57,59 @@ computed base scores, and no score was calculated here.
 
 The September 2026 readiness report's claim of "4 high Prisma
 advisories" is stale: **no Prisma package appears in this scan's
-findings** (Prisma 7.10.0 / @prisma/client 7.8.0 are installed and
+findings** (Prisma 7.10.1 / @prisma/client 7.10.1 are installed and
 return no OSV hits). Do not quote the old claim.
 
-## Findings
+## What the 2026-11-18 remediation changed
+
+Upgrades applied in `SecureGaurd-main/backend/` (commit pending — gate-pass
+run, 2026-11-18):
+
+| Package | Before → after | How | Finding(s) cleared |
+|---|---|---|---|
+| prisma / @prisma/client | 7.10.0 / 7.8.0 → **7.10.1** | `npm install prisma@7.10.1 @prisma/client@7.10.1` (patch bump, `^7.8.0` range) | deepmerge-ts HIGH + mysql2 HIGH + mysql2 MOD (prisma 7.10.1 bundles @prisma/config 7.10.1 → deepmerge-ts 8.0.2, and mysql2 3.24.4) |
+| body-parser | 2.3.0 → **2.4.0** | added as direct dep `^2.4.0` (express 5.3.0 allows `^2.0.1`) | body-parser HIGH |
+| fast-uri | 3.1.7 → **3.1.9** | `npm update fast-uri` (via ajv ← @prisma/dev) | fast-uri ×5 (2 LOW, 3 MOD) |
+| ip-address | 10.7.0 → **10.7.6** | `npm update ip-address` (via express-rate-limit) | ip-address ×3 MOD |
+| qs | 6.16.0 → 6.16.1 | pulled in by the prisma 7.10.1 tree refresh | qs MOD |
+
+Notes: `npm install` on this VM needs `--no-audit` (the registry audit
+endpoint 403s — known VM policy, not a failure) and `--ignore-scripts`
+(the `@prisma/engines` postinstall binary download resets mid-flight
+with ECONNRESET; retried, then ran separately — the client runtime does
+not need it, `prismaClient` loads OK). Verification: full offline suite
+**52/54 pass** (same 2 environmental failures as before the upgrade:
+compliance DB test needs live Postgres, deployment_config needs real
+secrets — neither is a regression); OSV re-scan **15 → 3 findings**.
+
+## Remaining findings (2026-11-18)
+
+| # | Advisory | CVE | Package @ installed | Severity | Fixed in |
+|---|---|---|---|---|---|
+| 1 | GHSA-fc5q-39xc-vjpf | CVE-2026-112366 | picomatch@4.0.7 | HIGH | **none listed** (latest release is 4.0.7) |
+| 2 | GHSA-g3hv-75wg-m249 | CVE-2026-118764 | minimatch@10.2.6 | MODERATE | 11.0.1 (major) |
+| 3 | GHSA-3g3m-2fjr-6pw4 | CVE-2026-118773 | glob@13.0.6 | MODERATE | 14.0.2 (major) |
+
+- **picomatch@4.0.7 — HIGH** — "picomatch vulnerable to ReDoS through
+  single-branch repeated extglobs" — `CVSS_V3:
+  CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H`, `CVSS_V4:
+  CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N`.
+  Published 2026-10-19; OSV `last_affected: 4.0.7`, no fixed version.
+  Reachability: picomatch is a transitive dep of **vite** (root dev
+  tooling) — build-time only. No user-controlled glob reaches it at
+  runtime; the backend does not depend on it. No patch exists upstream;
+  containment = none needed beyond that (not production-reachable).
+  **Owner decision needed:** risk-accept in writing with an expiry, or
+  wait for upstream 4.0.8. Do NOT claim this HIGH is fixed.
+- **minimatch@10.2.6 — MODERATE** — globparts-amplification DoS, fixed
+  in **11.0.1** (major). Parent: `@typescript-eslint/typescript-estree`
+  (root) and `glob@13.0.6` (backend, via @sentry/bundler-plugins).
+  Major bump needs the parent upgrades — Day 9 work.
+- **glob@13.0.6 — MODERATE** — "Glob: AbortSignal cancellation bypass
+  allows post-timeout filesystem traversal", fixed in **14.0.2**
+  (major). Parent: `@sentry/bundler-plugins`. Day 9 work.
+
+## Findings (2026-11-17 baseline — superseded by the 18 Nov scan above)
 
 | # | Advisory | CVE | Package @ installed | Severity | Fixed in |
 |---|---|---|---|---|---|
@@ -116,28 +170,19 @@ is in **both** lockfiles. Summaries (verbatim from OSV) and CVSS vectors:
   own toString (DoS)" — CVSS v3 and v4 vectors both published by OSV;
   fixed in **6.16.1**.
 
-## Fix guidance
+## Fix guidance (2026-11-18 state)
 
-All 8 packages are transitive, so fixes land by upgrading the parent
-dependency that pulls them in, or with an npm `overrides` entry — pick
-per package at fix time and re-run the scan after. Minimum upgrades
-that clear every finding for that package:
+Fixed in this run: body-parser, deepmerge-ts, mysql2, fast-uri,
+ip-address, qs (see the remediation table above). Still open:
 
 | Package | Upgrade to (clears all its findings) | Notes |
 |---|---|---|
-| body-parser | 2.4.0 | Patch/minor on the 2.x line. |
-| deepmerge-ts | 8.0.0 | Major bump. |
-| fast-uri | 3.1.9 | Patch on the 3.x line. |
-| glob | 14.0.2 | Major bump. |
-| ip-address | 10.7.4 | Patch on the 10.x line. |
-| minimatch | 11.0.1 | Major bump; present in both trees. |
-| mysql2 | 3.23.1 | Clears both findings (HIGH fixed from 3.22.0). Do this first — credential-leak class. |
-| qs | 6.16.1 | Patch. |
+| picomatch | **no fixed version exists** (4.0.7 latest) | Owner risk-accept with expiry, or wait for upstream. Build-time vite dep only. |
+| glob | 14.0.2 | Major bump; parent @sentry/bundler-plugins. Day 9. |
+| minimatch | 11.0.1 | Major bump; present in both trees. Day 9. |
 
-Suggested order: mysql2 → body-parser → deepmerge-ts → qs / fast-uri /
-ip-address (patches) → glob / minimatch (majors, check parent ranges).
 After any upgrade, re-run `node SecureGaurd-main/scripts/osv-scan.mjs`
-and confirm the finding count drops; do not hand-edit the table above.
+and confirm the finding count drops; do not hand-edit the tables above.
 
 ## Continuous scanning (CI)
 
@@ -162,10 +207,11 @@ next scan after the fixes above should be the first green run.
 - **Backend** (`SecureGaurd-main/backend/`): **9 outdated / 2 major**
   (was 10 on 2026-11-16 — `mongoose` removed by the fix-all run).
   Majors: `dotenv` 17.4.2→18.0.10,
-  `prisma` 7.10.0→8.0.0-rc.34. Minors include `@prisma/client` /
-  `@prisma/adapter-pg` 7.8.0→7.10.1.
+  `prisma` 7.10.1→8.0.0-rc.34. (`@prisma/client` /
+  `@prisma/adapter-pg` 7.8.0→7.10.1 was a minor — done in the 18 Nov
+  gate-pass run.)
 
-Outdated ≠ vulnerable: only the 15 findings above are known
+Outdated ≠ vulnerable: only the 3 findings above are known
 vulnerabilities. The major bumps (notably TypeScript 7, ESLint 10,
 Prisma 8-rc) are upgrade work, not security fixes, and Prisma 8 is a
 release candidate — do not chase it for this item.
