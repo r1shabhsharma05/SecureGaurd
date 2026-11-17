@@ -1,0 +1,51 @@
+# Dependency vulnerability scan — SEC-13.
+# `npm audit` is BLOCKED on the dev VM (registry returns 403 policy_denied
+# on the audit endpoint, verified 2026-11-14), so this scan runs in GitHub
+# Actions, where the registry audit endpoint is reachable. The local
+# fallback is scripts/osv-scan.mjs (OSV API, no auth), whose output is
+# recorded in docs/DEPENDENCY_VULNERABILITIES.md.
+#
+# Gate: the job FAILS when npm audit reports any high or critical
+# vulnerability in either package (root frontend or backend). Fix by
+# upgrading the affected package (or its parent) and re-running; do not
+# lower --audit-level to make the job green.
+name: Dependency scan
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, Mondays 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: npm audit (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ['.', 'backend']
+    defaults:
+      run:
+        working-directory: SecureGaurd-main/${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: npm audit (fail on high/critical)
+        run: npm audit --audit-level=high
+      - name: Save full audit report
+        if: always()
+        run: npm audit --json > npm-audit.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-${{ matrix.dir == '.' && 'root' || 'backend' }}
+          path: SecureGaurd-main/${{ matrix.dir }}/npm-audit.json
+          retention-days: 30
