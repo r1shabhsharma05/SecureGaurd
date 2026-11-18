@@ -42,6 +42,7 @@ model User {
   repositories         Repository[]
   scans                Scan[]
   complianceReports    ComplianceReport[]
+  apiKeys              ApiKey[]
 }
 
 model Organization {
@@ -62,6 +63,7 @@ model Organization {
   subscription Subscription?
   alertSetting AlertSetting?
   alertLogs    AlertLog[]
+  apiKeys      ApiKey[]
 }
 
 model Subscription {
@@ -422,5 +424,31 @@ model CustomRule {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, ruleId])
+  @@index([organizationId])
+}
+
+// API keys (19 Nov 2026): programmatic access for scripts and CI, without
+// a user password or JWT. Only the sha256 hash is stored — the key itself
+// is shown once at creation and never again. Scopes: 'read' (GET findings,
+// scans, SBOMs) and 'scan:trigger' (POST /api/scans/trigger). Revocation
+// sets revokedAt; rows are kept for audit. A key dies with its creator's
+// org membership (requireOrgContext verifies it on every use).
+model ApiKey {
+  id             Int       @id @default(autoincrement())
+  organizationId Int
+  userId         Int // creator
+  name           String
+  keyPrefix      String // first 12 chars of the key, shown in the list
+  keyHash        String    @unique // sha256 hex of the full key
+  scopes         String[]  // 'read' | 'scan:trigger'
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([organizationId])
 }

@@ -1,13 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
-const authMiddleware = require('../middleware/auth');
+const { authenticateRequest } = require('../middleware/apiKeyAuth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 // SEC-31: Sbom is an RLS table — reads run in a context. createAuditLog
 // self-wraps, so the audit calls below stay as-is.
 const { withRequestOrgContext } = require('../utils/rlsContext');
 
-router.use(authMiddleware);
+router.use(authenticateRequest());
 router.use(requireOrgContext);
 
 // Build a safe Content-Disposition value for an SBOM download. The SBOM

@@ -166,9 +166,15 @@ An end-to-end test run (report: `~/workspace/user/files/secureguard-e2e-report-2
 - **Analytics scope.** The product-activity panel is labelled site-wide (all accounts), restricted to OWNER/ADMIN, and probe/404 paths no longer top "most visited pages".
 - **Smaller fixes.** Finding IDs are one format (`V-0068`) everywhere; the Vuln DB has a status filter, AI-priority sort and 25/page pagination; the active tab survives refresh (`?tab=`); the header wraps at ~1034px instead of clipping buttons; `/verify-email` and `/oauth/callback` have correct page titles and the email link auto-verifies on landing; the CI/CD template uses the real webhook URL; Settings can edit the profile name (`PATCH /api/auth/me`) and replay onboarding (`/onboarding?replay=1`).
 
-Regression tests: `backend/tests/e2eFixes.test.js` (8 tests — dedup, compliance ignored bucket, billing expiry, analytics topPaths filter, vuln-list definition). Full suite: 98/100 pass; the 2 failures are the pre-existing live-Postgres/secrets ones (`compliance`, `deployment_config`).
+Regression tests: `backend/tests/e2eFixes.test.js` (10 tests — dedup, compliance ignored bucket, billing expiry, analytics topPaths filter, vuln-list definition, advisory-lock `$executeRaw` regression). Full suite: 107/109 pass; the 2 failures are the pre-existing live-Postgres/secrets ones (`compliance`, `deployment_config`).
 
-Still owner-only (not code): delete/disconnect the `harsh/secureguard-main` repo row in production and connect the real repo; Render logs for the connect 500; Razorpay keys + plans; Brevo verified sending domain; Google/GitHub OAuth client IDs; whether user-facing API keys are in scope; a backfill dedupe of the existing 112 finding rows.
+**Connect 500 — root cause found in Render logs, fixed here.** Every repo-connect attempt in the E2E window failed with Prisma P2010: `pg_advisory_xact_lock` returns `void`, and Prisma 7's pg adapter cannot deserialize a void column via `$queryRaw`. The lock call in `routes/repos.js` (and the same defect class in `routes/organizations.js` demote/remove/leave paths) now uses `$executeRaw`, which runs the statement without deserializing a result. Regression test above pins all four call sites.
+
+## API keys — 19 Nov 2026
+
+Programmatic access without a password or JWT. OWNER/ADMIN create keys in Settings → API Keys; the full key (`sg_…`) is shown once and never stored — only its sha256 hash. Scopes: `read` (GET findings, scans, SBOMs via the `X-Api-Key` header) and `scan:trigger` (POST `/api/scans/trigger`). Every other method/path with a key is a 403. Keys are org-scoped, revocable (soft revoke, kept for audit), optionally expiring, and die with the creator's org membership. Model `ApiKey` + migration `20261119_api_keys`; management routes `backend/routes/apiKeys.js`; auth in `backend/middleware/apiKeyAuth.js`; tests `backend/tests/apiKeys.test.js` (7 tests). Full suite with this feature: 107/109 pass (same 2 pre-existing env failures).
+
+Still owner-only (not code): delete/disconnect the `harsh/secureguard-main` repo row in production and connect the real repo; Razorpay keys + plans; Brevo verified sending domain; Google/GitHub OAuth client IDs; a backfill dedupe of the existing 112 finding rows.
 
 ## Security checklist
 

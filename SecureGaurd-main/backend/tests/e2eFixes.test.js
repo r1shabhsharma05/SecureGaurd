@@ -5,6 +5,8 @@
 //   from SecureGaurd-main.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 delete process.env.REDIS_URL;
 
@@ -202,4 +204,26 @@ test('vuln list: ?status=all returns every status', async () => {
   const all = await getVulns('?status=all');
   assert.equal(all.total, '6');
   assert.equal(all.body.length, 6);
+});
+
+// ── Advisory locks: $executeRaw, never $queryRaw ───────────────────────────
+// 19 Nov 2026, Render logs: every POST /api/repos in the E2E window failed
+// with Prisma P2010 — `pg_advisory_xact_lock` returns void and Prisma's pg
+// adapter cannot deserialize a void column via $queryRaw. $executeRaw runs
+// the same statement without deserializing a result. Same defect class
+// existed in organizations.js (demote / remove / leave owner re-checks).
+test('advisory locks: pg_advisory_xact_lock is only ever called via $executeRaw', () => {
+  const routesDir = path.join(__dirname, '..', 'routes');
+  const files = fs.readdirSync(routesDir).filter((f) => f.endsWith('.js'));
+  let executeRawLocks = 0;
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(routesDir, file), 'utf8');
+    assert.ok(
+      !/\$queryRaw`SELECT pg_advisory_xact_lock/.test(src),
+      `${file}: pg_advisory_xact_lock via $queryRaw throws P2010 (void column) — use $executeRaw`
+    );
+    executeRawLocks += (src.match(/\$executeRaw`SELECT pg_advisory_xact_lock/g) || []).length;
+  }
+  // 1 in repos.js (create) + 3 in organizations.js (demote/remove/leave).
+  assert.equal(executeRawLocks, 4);
 });

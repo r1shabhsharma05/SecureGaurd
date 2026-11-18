@@ -356,7 +356,7 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
       // transaction holding a per-org advisory lock, so two concurrent
       // demotes cannot both observe 2 owners and leave the org ownerless.
       if (targetMembership.role === 'OWNER' && role !== 'OWNER') {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
         const ownerCount = await tx.organizationMembership.count({
           where: { organizationId: req.organizationId, role: 'OWNER' }
         });
@@ -443,7 +443,7 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
       // Same locked re-check as the demote path: the count above is a
       // fast path only — two concurrent removes must not both pass.
       if (targetMembership.role === 'OWNER') {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
         const ownerCount = await tx.organizationMembership.count({
           where: { organizationId: req.organizationId, role: 'OWNER' }
         });
@@ -494,7 +494,7 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
       // above is a fast path only — two concurrent leaves must not
       // both pass and leave the org ownerless.
       if (req.orgRole === 'OWNER') {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${Number(req.organizationId)})`;
         const ownerCount = await tx.organizationMembership.count({
           where: { organizationId: req.organizationId, role: 'OWNER' }
         });

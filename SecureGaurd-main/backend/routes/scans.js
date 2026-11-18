@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
+const { authenticateRequest } = require('../middleware/apiKeyAuth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { checkCanTriggerScan } = require('../services/billingService');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
@@ -100,7 +101,7 @@ router.get('/export-feedback', validateQuery(zPagination), async (req, res, next
   }
 });
 
-router.use(authMiddleware);
+router.use(authenticateRequest({ allowTrigger: true }));
 router.use(requireOrgContext);
 
 // GET /api/scans/queue/stats — queue depth + cache hit rate (ops visibility).

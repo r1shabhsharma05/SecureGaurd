@@ -204,6 +204,70 @@ export default function Dashboard() {
     }
   };
 
+  // API keys — programmatic access (read findings/scans, trigger scans).
+  // The full key is shown once at creation and never again.
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [apiKeysError, setApiKeysError] = useState('');
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>(['read']);
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newKeySecret, setNewKeySecret] = useState('');
+
+  const fetchApiKeys = useCallback(async () => {
+    if (!accessToken) return;
+    setApiKeysLoading(true);
+    setApiKeysError('');
+    try {
+      const res = await orgFetch('/api/api-keys');
+      if (!res.ok) throw new Error(`Failed to load API keys (${res.status})`);
+      setApiKeys(await res.json());
+    } catch (err) {
+      setApiKeysError(err instanceof Error ? err.message : 'Failed to load API keys.');
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }, [accessToken, orgFetch]);
+
+  // Load lazily when the Settings tab opens.
+  useEffect(() => {
+    if (activeNav === 'settings') void fetchApiKeys();
+  }, [activeNav, fetchApiKeys]);
+
+  const handleCreateApiKey = async () => {
+    if (!accessToken || creatingKey || !newKeyName.trim() || newKeyScopes.length === 0) return;
+    setCreatingKey(true);
+    setApiKeysError('');
+    try {
+      const res = await orgFetch('/api/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name: newKeyName.trim(), scopes: newKeyScopes }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setApiKeysError(data.message || 'Could not create API key.'); return; }
+      setNewKeySecret(data.key);
+      setNewKeyName('');
+      setNewKeyScopes(['read']);
+      await fetchApiKeys();
+    } catch {
+      setApiKeysError('Could not create API key. Check your connection and try again.');
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async (id: number, name: string) => {
+    if (!window.confirm(`Revoke API key "${name}"? Scripts using it will stop working.`)) return;
+    try {
+      const res = await orgFetch(`/api/api-keys/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error();
+      pushToast('success', 'API key revoked.');
+      await fetchApiKeys();
+    } catch {
+      pushToast('error', 'Could not revoke API key. Try again.');
+    }
+  };
+
   // SEC-09 / SEC-38 — change password + email verification status.
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -1835,6 +1899,67 @@ export default function Dashboard() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* API keys — scripts and CI. Full key shown once, never stored. */}
+            <div className="settings-card">
+              <h3 className="settings-section-title">API Keys</h3>
+              <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
+                Keys authorize scripts and CI without a password: <code>read</code> lists findings, scans and SBOMs (<code>X-Api-Key</code> header), <code>scan:trigger</code> also starts scans. Nothing else is reachable with a key.
+              </p>
+              {apiKeysError && <p style={{fontSize:'0.8rem', color:'#f87171', marginBottom:'0.5rem'}} role="alert">{apiKeysError}</p>}
+              {newKeySecret && (
+                <div style={{background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.4)', borderRadius:'6px', padding:'0.75rem', marginBottom:'0.75rem', fontSize:'0.8rem'}}>
+                  <p style={{marginBottom:'0.5rem'}}>Copy this key now — it will never be shown again.</p>
+                  <code style={{wordBreak:'break-all'}}>{newKeySecret}</code>
+                  <div style={{marginTop:'0.5rem'}}>
+                    <button type="button" className="repo-action-btn-small" onClick={() => { navigator.clipboard?.writeText(newKeySecret); pushToast('success', 'API key copied.'); }}>Copy key</button>{' '}
+                    <button type="button" className="repo-action-btn-small" onClick={() => setNewKeySecret('')}>Done</button>
+                  </div>
+                </div>
+              )}
+              <div style={{display:'flex', gap:'0.5rem', flexWrap:'wrap', alignItems:'center', marginBottom:'0.75rem'}}>
+                <input
+                  type="text"
+                  placeholder="Key name, e.g. ci"
+                  value={newKeyName}
+                  onChange={e => setNewKeyName(e.target.value)}
+                  style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem', flex:'1 1 160px'}}
+                />
+                {(['read', 'scan:trigger'] as const).map(s => (
+                  <label key={s} style={{fontSize:'0.8rem', display:'flex', alignItems:'center', gap:'0.3rem'}}>
+                    <input
+                      type="checkbox"
+                      checked={newKeyScopes.includes(s)}
+                      onChange={e => setNewKeyScopes(prev => e.target.checked ? [...prev, s] : prev.filter(x => x !== s))}
+                    />
+                    <code>{s}</code>
+                  </label>
+                ))}
+                <button type="button" className="connect-repo-btn" disabled={creatingKey || !newKeyName.trim() || newKeyScopes.length === 0} onClick={() => void handleCreateApiKey()}>
+                  {creatingKey ? 'Creating…' : 'Create key'}
+                </button>
+              </div>
+              {apiKeysLoading ? (
+                <p style={{fontSize:'0.8rem', color:'var(--text-dim)'}}>Loading keys…</p>
+              ) : apiKeys.length === 0 ? (
+                <p style={{fontSize:'0.8rem', color:'var(--text-dim)'}}>No API keys yet.</p>
+              ) : (
+                <div style={{display:'flex', flexDirection:'column', gap:'0.5rem'}}>
+                  {apiKeys.map(k => (
+                    <div key={k.id} style={{display:'flex', gap:'0.75rem', alignItems:'center', flexWrap:'wrap', fontSize:'0.8rem', border:'1px solid var(--border-color)', borderRadius:'6px', padding:'0.6rem 0.75rem'}}>
+                      <span style={{fontWeight:600}}>{k.name}</span>
+                      <code>{k.keyPrefix}…</code>
+                      <span style={{color:'var(--text-dim)'}}>{k.scopes.join(', ')}</span>
+                      <span style={{color:'var(--text-dim)'}}>created {new Date(k.createdAt).toLocaleDateString()}</span>
+                      {k.lastUsedAt && <span style={{color:'var(--text-dim)'}}>last used {new Date(k.lastUsedAt).toLocaleDateString()}</span>}
+                      {k.revokedAt
+                        ? <span style={{color:'#f87171'}}>revoked</span>
+                        : <button type="button" className="repo-action-btn-small" onClick={() => void handleRevokeApiKey(k.id, k.name)}>Revoke</button>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Email verification status (SEC-09) */}

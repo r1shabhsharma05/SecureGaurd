@@ -24,7 +24,11 @@ async function requireOrgContext(req, res, next) {
   }
 
   let requestedOrgId = req.headers['x-organization-id'] || req.query.organizationId || req.body?.organizationId;
-  
+
+  // An API key pins its own org: the key's org wins over the creator's
+  // default org, and the membership lookup below still verifies the
+  // creator still belongs to it (a key dies with the membership).
+  if (req.apiKeyOrgId) requestedOrgId = req.apiKeyOrgId;
   // If route param contains orgId or id (on /api/organizations/:id routes)
   if (!requestedOrgId && req.params && req.params.organizationId) {
     requestedOrgId = req.params.organizationId;
@@ -106,6 +110,9 @@ async function requireOrgContext(req, res, next) {
  */
 function requireOrgRole(allowedRoles = []) {
   return (req, res, next) => {
+    // API keys carry no role: their scopes were already enforced at auth
+    // (authenticateRequest), and keys never reach a write route.
+    if (req.apiKey) return next();
     if (!req.orgRole) {
       return res.status(403).json({ message: 'Organization context missing' });
     }

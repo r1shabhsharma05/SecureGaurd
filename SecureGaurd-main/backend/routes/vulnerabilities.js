@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../prismaClient');
-const authMiddleware = require('../middleware/auth');
+const { authenticateRequest } = require('../middleware/apiKeyAuth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 // SEC-31: Vulnerability is an RLS table — every read/write runs in a
 // context. createAuditLog self-wraps, so the audit calls stay as-is.
 const { withRequestOrgContext } = require('../utils/rlsContext');
 const cache = require('../utils/cache');
 
-router.use(authMiddleware);
+router.use(authenticateRequest());
 router.use(requireOrgContext);
 
 // GET /api/vulnerabilities — list vulns for active organization (cached 60 s, org-scoped).

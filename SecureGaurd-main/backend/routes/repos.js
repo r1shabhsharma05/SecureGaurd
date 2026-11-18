@@ -114,7 +114,7 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, re
       // RLS context inside the existing transaction (no nesting):
       // the advisory lock + re-check + insert below all need it.
       await setOrgContext(tx, req.organizationId, req.userId);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(${req.organizationId}::bigint)`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${req.organizationId}::bigint)`;
       const sub = await tx.subscription.findUnique({
         where: { organizationId: req.organizationId },
       });
