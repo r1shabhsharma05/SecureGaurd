@@ -11,34 +11,43 @@ const cache = require('../utils/cache');
 router.use(authMiddleware);
 router.use(requireOrgContext);
 
-// GET /api/vulnerabilities — list open vulns for active organization with filters (cached 60 s, org-scoped)
+// GET /api/vulnerabilities — list vulns for active organization (cached 60 s, org-scoped).
+// Canonical definition, used by every surface: open findings only, unless
+// ?status= is passed explicitly. ?page&limit paginate (default 100/page,
+// max 200); X-Total-Count carries the unpaged total. Severity order is a
+// rank (critical > high > medium > low), not alphabetical.
+const SEVERITY_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 router.get('/', async (req, res) => {
   const { severity, status, scanId } = req.query;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
 
   try {
-    const cacheKey = cache.keys.vulnList(req.organizationId, JSON.stringify({ severity: severity || null, status: status || null, scanId: scanId || null }));
-    const { value: vulns, hit } = await cache.getOrSet(cacheKey, cache.TTL.list, () => {
+    const cacheKey = cache.keys.vulnList(req.organizationId, JSON.stringify({ severity: severity || null, status: status || 'open', scanId: scanId || null, page, limit }));
+    const { value: result, hit } = await cache.getOrSet(cacheKey, cache.TTL.list, async () => {
+    // No ?status= means open only: the dashboard, the list and the
+    // summary all count the same rows. ?status=all means every status.
+    const statusFilter = !status ? 'open' : String(status).toLowerCase() === 'all' ? undefined : String(status).toLowerCase();
     const where = {
       scan: { organizationId: req.organizationId },
       ...(severity && { severity }),
-      ...(status  && { status  }),
+      ...(statusFilter && { status: statusFilter }),
       ...(scanId && !isNaN(parseInt(scanId)) && { scanId: parseInt(scanId) }),
     };
 
-    return withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
+    const rows = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where,
       include: {
         scan: { select: { id: true, repository: { select: { id: true, name: true, fullName: true, platform: true, language: true } } } },
       },
-      orderBy: [
-        { severity: 'asc' },
-        { createdAt: 'desc' },
-      ],
-      take: 100,
+      orderBy: { createdAt: 'desc' },
     }));
+    rows.sort((a, b) => (SEVERITY_RANK[a.severity] ?? 99) - (SEVERITY_RANK[b.severity] ?? 99));
+    return { rows: rows.slice((page - 1) * limit, page * limit), total: rows.length, page, limit };
     });
     res.set('X-Cache', hit ? 'HIT' : 'MISS');
-    res.json(vulns);
+    res.set('X-Total-Count', String(result.total));
+    res.json(result.rows);
   } catch (err) {
     console.error('Error fetching vulnerabilities:', err);
     res.status(500).json({ message: 'Server error' });
@@ -54,7 +63,10 @@ router.get('/:id', async (req, res) => {
 
   try {
     const { value: detail, hit } = await cache.getOrSet(cache.keys.vulnDetail(req.organizationId, vulnId), cache.TTL.detail, async () => {
-    const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
+    // One transaction for both reads: two sequential transactions doubled
+    // the round-trips (RLS set_config each) on every detail load.
+    return withRequestOrgContext(req, async (tx) => {
+    const vuln = await tx.vulnerability.findFirst({
       where: {
         id: vulnId,
         scan: { organizationId: req.organizationId }
@@ -81,23 +93,24 @@ router.get('/:id', async (req, res) => {
           }
         }
       }
-    }));
+    });
 
     if (!vuln) {
       return null;
     }
 
-    // Day 7 — occurrence history: the same finding (same rule + file) in
-    // other scans of the same repository, org-scoped. This is what the
-    // detail page's "seen before" story is built from; the current scan's
-    // own row is excluded so the list is never self-referential.
+    // Day 7 — occurrence history: the same finding (same rule + file +
+    // LINE) in other scans of the same repository, org-scoped. Matching
+    // rule + file only conflated distinct lines into one "finding" and
+    // showed legitimately different statuses as a contradiction.
     let occurrences = [];
     if (vuln.ruleId && vuln.scan && vuln.scan.repository) {
-      occurrences = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
+      occurrences = await tx.vulnerability.findMany({
         where: {
           id: { not: vulnId },
           ruleId: vuln.ruleId,
           filePath: vuln.filePath,
+          lineStart: vuln.lineStart,
           scan: { organizationId: req.organizationId, repositoryId: vuln.scan.repository.id },
         },
         select: {
@@ -106,10 +119,11 @@ router.get('/:id', async (req, res) => {
         },
         orderBy: { createdAt: 'desc' },
         take: 20,
-      }));
+      });
     }
 
     return { ...vuln, occurrences };
+    });
     });
     if (!detail) return res.status(404).json({ message: 'Vulnerability not found' });
     res.set('X-Cache', hit ? 'HIT' : 'MISS');

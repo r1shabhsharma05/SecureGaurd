@@ -635,6 +635,35 @@ router.get('/me', meLimiter, async (req, res) => {
   }
 });
 
+// ── PATCH /api/auth/me ───────────────────────────────────────────────────────
+// Self-service profile-name correction (there was no way to fix a name
+// typed wrong at signup short of a DB edit). Own account only; the email
+// itself is never changed here. OAuth logins must not overwrite the
+// corrected name — the callback only fills a name when the row has none.
+router.patch('/me', authMiddleware, async (req, res) => {
+  const { firstName, lastName } = req.body || {};
+  const clean = (v) => (typeof v === 'string' ? v.trim() : '');
+  const first = clean(firstName);
+  const last = clean(lastName);
+  const NAME_RE = /^[A-Za-z][A-Za-z'’\- ]{0,49}$/;
+  if ((firstName !== undefined && !NAME_RE.test(first)) || (lastName !== undefined && !NAME_RE.test(last))) {
+    return res.status(400).json({ message: 'firstName and lastName must be 1-50 letters, spaces, hyphens or apostrophes' });
+  }
+  if (firstName === undefined && lastName === undefined) {
+    return res.status(400).json({ message: 'nothing to update' });
+  }
+  try {
+    const user = await prisma.user.update({
+      where: { id: req.userId },
+      data: { ...(firstName !== undefined ? { firstName: first } : {}), ...(lastName !== undefined ? { lastName: last } : {}) },
+      select: { id: true, firstName: true, lastName: true, email: true, isEmailVerified: true, onboardingCompleted: true },
+    });
+    res.json({ user: { ...user, onboardingCompleted: !!user.onboardingCompleted } });
+  } catch {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ── SSO / OIDC (Day 10) ───────────────────────────────────────────────────────
 // "Continue with Google / GitHub / GitLab": real authorization-code + PKCE
 // flows (utils/oauth.js). A provider works only when its client id + secret

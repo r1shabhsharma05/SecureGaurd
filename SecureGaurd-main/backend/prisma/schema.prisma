@@ -227,6 +227,7 @@ model Scan {
   lowCount        Int       @default(0)
   secretsFound    Int       @default(0)
   durationMs      Int       @default(0)
+  errorMessage    String?   // clone/resolve failure reason; shown in scan history (never a silent FAILED)
   startedAt       DateTime  @default(now())
   completedAt     DateTime?
   createdAt       DateTime  @default(now())
@@ -262,6 +263,9 @@ model Vulnerability {
   updatedAt       DateTime @updatedAt
 
   scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+  @@index([ruleId, filePath])
 }
 
 model ComplianceReport {

@@ -6,6 +6,14 @@
 // Prisma client (or a stub with the same methods in unit tests).
 const RANGES = { '7d': 7, '30d': 30, '90d': 90 };
 
+// Real app routes (App.tsx). Anything else in AnalyticsEvent.path is a
+// probe, a 404, or a mistyped URL — not a visited page.
+const KNOWN_APP_PATHS = [
+  '/', '/login', '/signup', '/contact', '/privacy', '/terms', '/onboarding',
+  '/verify-email', '/dashboard', '/vulnerabilities', '/scans',
+  '/accept-invite', '/reset-password', '/oauth/callback',
+];
+
 function parseSummaryRange(raw) {
   if (typeof raw !== 'string') return 30;
   return RANGES[raw] || null;
@@ -61,7 +69,12 @@ async function buildAnalyticsSummary(db, { from, to, days }) {
     eventsByType: eventsByType
       .map((r) => ({ event: r.event, count: r._count.event }))
       .sort((a, b) => b.count - a.count),
-    topPaths: topPaths.map((r) => ({ path: r.path, count: r._count.path })),
+    topPaths: topPaths
+      // Probe/404 paths (e.g. /__day8_probe__, /this-page-does-not-exist-123)
+      // are recorded by ingestion and used to top the "most visited" list.
+      // Only real app routes count as visited pages.
+      .filter((r) => KNOWN_APP_PATHS.some((p) => r.path === p || r.path.startsWith(`${p}/`)))
+      .map((r) => ({ path: r.path, count: r._count.path })),
     signupsByDay: bucketByDay(signupRows, from, days),
     scansByDay: bucketByDay(
       scanRows.map((r) => ({ createdAt: r.completedAt })),

@@ -6,6 +6,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { runSecurityScan } = require('../utils/securityScanner');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
+const { dedupeFindings } = require('../utils/findingDedup');
 const crypto = require('crypto');
 const { encrypt, decrypt } = require('../utils/cryptoUtils');
 const { checkCanTriggerScan } = require('../services/billingService');
@@ -286,7 +287,14 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     }));
 
     if (finalFindings.length > 0) {
-      const dbFindings = finalFindings.map(f => ({
+      // Same dedup as scanRunner: a push re-scan must not insert a second
+      // copy of a finding already open for this repo (rule + file + line).
+      const alreadyOpen = await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.findMany({
+        where: { status: 'open', scan: { repositoryId: repo.id, organizationId: repo.organizationId } },
+        select: { ruleId: true, filePath: true, lineStart: true },
+      }));
+      const dbFindings = dedupeFindings(finalFindings, alreadyOpen)
+        .map(f => ({
         scanId: scan.id,
         ruleId: f.ruleId,
         cweId: f.cweId,
@@ -299,7 +307,7 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         codeSnippet: f.codeSnippet,
         status: 'open'
       }));
-      await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
+      if (dbFindings.length > 0) await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';

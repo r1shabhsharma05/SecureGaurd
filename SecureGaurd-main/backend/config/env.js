@@ -35,6 +35,8 @@ const OPTIONAL_VARS = [
   { name: 'GEMINI_WEB2API_KEY', why: 'AI fix engine: web2api proxy bearer token' },
   { name: 'GEMINI_WEB2API_URL', why: 'AI fix engine: web2api proxy base URL' },
   { name: 'CONTACT_EMAIL', why: 'recipient for contact-form messages (defaults to the EMAIL_FROM address)' },
+  { name: 'BREVO_API_KEY', why: 'Brevo HTTP API key for transactional mail (utils/mailer.js); without it mail falls back to SMTP' },
+  { name: 'EMAIL_FROM', why: 'verified sender address for auth mail; an unverified/shared-domain sender lands in Gmail Spam' },
   { name: 'FP_CLASSIFIER_URL', why: 'Python ML false-positive classifier service URL' },
   { name: 'CLASSIFIER_API_KEY', why: 'auth token for the FP classifier service' },
   { name: 'REDIS_URL', why: 'BullMQ scan queue + read-through cache (utils/redis.js); unset => in-process queue, cache bypassed' },

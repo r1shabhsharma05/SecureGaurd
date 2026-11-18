@@ -85,6 +85,13 @@ async function getOrgPlan(organizationId, tx = null) {
     return PLANS.FREE;
   }
 
+  // An expired period is not a paid plan, even if the row still says
+  // active — a leftover mock/expired subscription must not keep Pro
+  // entitlements past its period end.
+  if (sub.currentPeriodEnd && new Date(sub.currentPeriodEnd) < new Date()) {
+    return PLANS.FREE;
+  }
+
   return getPlanConfig(sub.plan);
 }
 

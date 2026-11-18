@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { execFile } = require('child_process');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -21,6 +22,22 @@ const REMOTE_GIT_URL_RE = /^(?:https?:\/\/|git:\/\/)[^\s]+$|^git@[^\s/:]+:[^\s]+
 // so control characters, quotes and CR/LF are rejected at creation.
 const INVALID_REPO_NAME_RE = /["'\x00-\x1F\x7F]/;
 const MAX_REPO_NAME_LENGTH = 100;
+
+// The scanner clones anonymously, so a URL that does not resolve to a
+// public repo can never produce a scan — reject it at connect time instead
+// of storing a dead repo that fails every scan at clone. `git ls-remote`
+// is the cheapest reachability probe (no clone, no credentials). SSH
+// remotes are checked in their anonymous-HTTPS form, the same form the
+// scanner clones; non-HTTP(S) URLs were already rejected above.
+function checkRepoReachable(rawUrl) {
+  return new Promise((resolve) => {
+    let url = rawUrl.trim();
+    const sshMatch = url.match(/^git@([^:]+):(.+)$/);
+    if (sshMatch) url = `https://${sshMatch[1]}/${sshMatch[2]}`;
+    if (!/^https?:\/\//i.test(url)) return resolve(true);
+    execFile('git', ['ls-remote', url, 'HEAD'], { timeout: 15000 }, (err) => resolve(!err));
+  });
+}
 
 // All repo routes require auth and organization context
 router.use(authMiddleware);
@@ -61,6 +78,9 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, re
   }
   if (!REMOTE_GIT_URL_RE.test(trimmedUrl)) {
     return res.status(400).json({ message: 'url must be a remote git URL (https://, http://, git://, or git@host:path)' });
+  }
+  if (!(await checkRepoReachable(trimmedUrl))) {
+    return res.status(400).json({ message: 'repository URL is not reachable (git ls-remote found no such public repository). Connect a public repository URL.' });
   }
 
   try {

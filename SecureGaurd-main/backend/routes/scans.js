@@ -247,7 +247,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
       console.error('Error queueing scan:', queueErr);
       await withRequestOrgContext(req, (tx) => tx.scan.update({
         where: { id: scan.id },
-        data: { status: 'failed', completedAt: new Date() },
+        data: { status: 'failed', completedAt: new Date(), errorMessage: 'Scan could not be queued. Please try again.' },
       }));
       return res.status(503).json({ message: 'Scan could not be queued. Please try again.', scanId: scan.id });
     }

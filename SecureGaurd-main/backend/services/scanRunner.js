@@ -22,6 +22,7 @@ const { runScanInThread } = require('../workers/scanThreadPool');
 const { storedRuleToParsed } = require('../utils/customRules');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
+const { dedupeFindings } = require('../utils/findingDedup');
 const { withOrgContext } = require('../utils/rlsContext');
 const { invalidateOrg } = require('../utils/cache');
 
@@ -78,7 +79,7 @@ async function markFailed(organizationId, userId, scanId, reason) {
   try {
     await withOrgContext(organizationId, userId, (tx) => tx.scan.update({
       where: { id: scanId },
-      data: { status: 'failed', completedAt: new Date() },
+      data: { status: 'failed', completedAt: new Date(), errorMessage: String(reason || 'Scan failed').slice(0, 1000) },
     }));
   } catch (err) {
     console.error('[scanRunner] could not mark scan failed:', err.message);
@@ -269,7 +270,17 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
     }));
 
     if (finalFindings.length > 0) {
-      const dbFindings = finalFindings.map(f => ({
+      // Dedup: a re-scan must not insert a second copy of a finding that
+      // is already open for this repo (same rule + file + line). Without
+      // this every re-scan doubled the Vulnerability table and the counts
+      // on every surface diverged. A finding fixed since the last scan is
+      // re-inserted (only open rows are skipped), so a regression re-opens.
+      const alreadyOpen = await ctx((tx) => tx.vulnerability.findMany({
+        where: { status: 'open', scan: { repositoryId: repo.id, organizationId } },
+        select: { ruleId: true, filePath: true, lineStart: true },
+      }));
+      const freshFindings = dedupeFindings(finalFindings, alreadyOpen);
+      const dbFindings = freshFindings.map(f => ({
         scanId: scan.id,
         ruleId: f.ruleId,
         cweId: f.cweId,
@@ -285,7 +296,7 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
         status: f.status || 'open',
         mlFeatures: f.mlFeatures ? f.mlFeatures : null
       }));
-      await ctx((tx) => tx.vulnerability.createMany({ data: dbFindings }));
+      if (dbFindings.length > 0) await ctx((tx) => tx.vulnerability.createMany({ data: dbFindings }));
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';

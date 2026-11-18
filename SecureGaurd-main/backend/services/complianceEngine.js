@@ -261,7 +261,7 @@ function evaluateCompliance({ framework, vulnerabilities = [], repository, repor
 
   // Filter vulnerabilities: only open vulnerabilities count towards control degradation
   const openVulns = vulnerabilities.filter(v => v.status === 'open' || !v.status);
-  const fixedOrIgnoredVulns = vulnerabilities.filter(v => v.status === 'fixed' || v.status === 'false_positive');
+  const fixedOrIgnoredVulns = vulnerabilities.filter(v => v.status === 'fixed' || v.status === 'false_positive' || v.status === 'ignored');
 
   // Counts breakdown
   let criticalCount = 0;

@@ -14,6 +14,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
+const { requireOrgContext, requireOrgRole } = require('../middleware/rbac');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
 const { validateBody, contactSchema } = require('../utils/validation');
@@ -130,7 +131,9 @@ router.post('/contact', contactLimiter, requireTurnstile(), validateBody(contact
 // Day 9 — product-activity summary for the dashboard Analytics tab.
 // Authenticated only, aggregate counts only (no per-user rows, no emails,
 // no IPs). Range is 7d/30d/90d; anything else is a 400, not a silent default.
-router.get('/analytics/summary', authMiddleware, async (req, res) => {
+// Site-wide by design (all accounts) — so OWNER/ADMIN only; a member must
+// never see other accounts' totals.
+router.get('/analytics/summary', authMiddleware, requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
   const days = parseSummaryRange(req.query.range);
   if (!days) {
     return res.status(400).json({ message: 'range must be one of: 7d, 30d, 90d.' });
