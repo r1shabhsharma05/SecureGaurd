@@ -25,7 +25,7 @@ const FEATURES = [
     icon: Lock,
     color: '#10B981',
     title: 'Zero-Day Intelligence',
-    desc: 'Our AI is trained on 50M+ CVEs and threat patterns, keeping you protected against emerging exploits.',
+    desc: 'Our AI classifies vulnerabilities and threat patterns, keeping you protected against emerging exploits.',
   },
   {
     icon: GitBranch,

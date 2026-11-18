@@ -31,7 +31,7 @@ export default function CTA() {
           </h2>
 
           <p className="cta-sub">
-            Join 50,000+ developers who've made security part of their workflow.
+            Join developers who've made security part of their workflow.
             Set up in under 60 seconds. No credit card required.
           </p>
 
