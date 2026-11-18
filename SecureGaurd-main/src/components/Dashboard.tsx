@@ -507,9 +507,8 @@ export default function Dashboard() {
   // triggered immediately; while it runs the UI shows only an
   // indeterminate spinner plus the real status polled from
   // GET /api/scans/:id (same endpoint the onboarding wizard reads).
-  // POST /api/scans/trigger is synchronous today, so the first poll
-  // normally already sees the terminal status; the poll also covers a
-  // future async trigger without changing this UI.
+  // POST /api/scans/trigger returns 202 with the queued scan row; the
+  // poll below watches GET /api/scans/:id until it reaches completed/failed.
   const triggerScan = async () => {
     if (scanning || !selectedRepo || !accessToken) return;
     setScanning(true);
@@ -569,7 +568,7 @@ export default function Dashboard() {
         await fetchData();
         if (finalStatus === 'completed') {
           trackEvent('scan_started', { repositoryId: selectedRepo.id });
-          pushToast('success', data.message || 'Scan completed.');
+          pushToast('success', 'Scan completed.');
         } else if (finalStatus === 'failed') {
           pushToast('error', 'Scan failed. See scan history for details.');
         } else {

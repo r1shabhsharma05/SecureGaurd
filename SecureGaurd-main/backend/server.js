@@ -143,7 +143,30 @@ prisma.$connect()
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+  const server = app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+  // Scan worker runs in-process (single Render service): BullMQ when
+  // REDIS_URL is set, in-process FIFO otherwise. Never blocks boot — a
+  // worker failure is logged, the API still serves.
+  const { startWorker, closeQueue } = require('./queues/scanQueue');
+  const { closeRedis } = require('./utils/redis');
+  const { closePool } = require('./workers/scanThreadPool');
+  startWorker()
+    .then(({ mode }) => console.log(`Scan worker started (mode: ${mode})`))
+    .catch((err) => console.error('Scan worker failed to start (scans will fail to queue):', err.message));
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log('Shutting down: draining scan worker…');
+    try { await closeQueue(); } catch { /* already closed */ }
+    try { await closePool(); } catch { /* already closed */ }
+    try { await closeRedis(); } catch { /* already closed */ }
+    try { await prisma.$disconnect(); } catch { /* already closed */ }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 module.exports = app;

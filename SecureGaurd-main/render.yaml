@@ -45,6 +45,13 @@ services:
         sync: false
       - key: FP_CLASSIFIER_URL
         sync: false
+      # Queue + cache: provision a Redis (Render Key Value or Upstash) and
+      # paste its URL here. Until then the API still works — scans run on
+      # an in-process queue and the cache is bypassed (see docs/SCAN_QUEUE_CACHE_LOADTEST.md).
+      - key: REDIS_URL
+        sync: false
+      - key: SCAN_WORKER_CONCURRENCY
+        sync: false
       - key: GEMINI_WEB2API_URL
         sync: false
       - key: GEMINI_WEB2API_KEY

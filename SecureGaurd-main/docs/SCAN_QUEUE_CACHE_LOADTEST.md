@@ -1,0 +1,134 @@
+# Scan Queue, Cache & Load Test
+
+**Status:** implemented 2026-11-19 (3-week plan, done in one pass). Tests:
+`backend/tests/scanQueueCache.test.js` (4/4), full backend suite 79/81
+(the 2 failures are pre-existing: `compliance.test.js` and
+`deployment_config.test.js` need a live Postgres + real env secrets).
+
+## What changed and why
+
+`POST /api/scans/trigger` used to run the whole scan inline in the
+request: AST extraction + git churn + classifier calls + SBOM + DB writes,
+all on the event loop. N concurrent triggers serialized on that loop, so
+response time grew with N (measured: 10 concurrent → submit p95 3,889 ms).
+
+Now the trigger only creates a `queued` scan row and enqueues a job.
+A worker runs the scan; the dashboard polls `GET /api/scans/:id` to a
+terminal status (it already did). Two bottlenecks were found by measuring:
+
+1. `execFileSync git log` per finding blocked the event loop → async
+   `execFile` with a bounded pool (8).
+2. Spawning a worker thread per scan cost ~250 ms — more than the ~90 ms
+   scan itself on a small repo → a persistent thread pool
+   (`workers/scanThreadPool.js`, size defaults to the worker concurrency).
+
+## Architecture
+
+```
+POST /api/scans/trigger
+  -> scan row (status queued) -> BullMQ 'secureguard-scans'  [REDIS_URL set]
+                              -> in-process FIFO               [REDIS_URL unset]
+  -> 202 { scanId, status: 'queued' }
+
+Worker (concurrency SCAN_WORKER_CONCURRENCY, default 2)
+  -> executeScan (services/scanRunner.js)
+       -> scan in pooled worker thread (workers/scanThread.js)
+       -> thread failure falls back to inline (slow, scan still runs)
+  -> scan queued -> running -> completed | failed
+  -> org cache invalidated on completion/failure
+
+GET /api/scans/:id            cached only when terminal (300 s)
+GET /api/scans               cached 60 s
+GET /api/scans/stats/summary cached 30 s
+GET /api/vulnerabilities     cached 60 s (list), 120 s (detail)
+GET /api/scans/queue/stats   queue counts + cache stats (no cache)
+```
+
+**Queue semantics.** Jobs are never retried automatically (`attempts: 1`;
+a failed scan already failed honestly in its row). A BullMQ job whose
+scan returns `{ ok: false }` is marked failed, not completed, so the
+queue stats stay honest. Inline mode (no Redis) has the same FIFO +
+concurrency, but jobs live in memory — a crash loses queued jobs (their
+rows stay `queued`; re-trigger). BullMQ jobs survive a restart.
+
+**Cache semantics.** Redis read-through, org-scoped keys
+(`sg:cache:v1:org:<id>:...`), `X-Cache: HIT | MISS | BYPASS` headers.
+Non-terminal scans are never cached — the dashboard's 2 s poll must
+never see a stale `running`. 404s are never cached. PATCH on a
+vulnerability invalidates the org's keys. Redis down or unset → bypass,
+never throws. Stats: hits, misses, bypasses, sets, invalidations.
+
+## Environment
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `REDIS_URL` | unset | BullMQ queue + cache. Unset → in-process queue, cache bypassed. |
+| `SCAN_WORKER_CONCURRENCY` | `2` | Scans running at once (BullMQ worker + thread pool). |
+| `SCAN_THREAD_POOL_SIZE` | = concurrency | Persistent scan worker threads. |
+| `SCAN_THREAD_TIMEOUT_MS` | `600000` | Kill a stuck scan thread after this long. |
+
+Local dev: `docker-compose.yml` adds a `redis:8-alpine` service and
+wires `REDIS_URL` for the backend.
+
+## Production setup (owner step)
+
+Until `REDIS_URL` is set in the Render dashboard, production runs the
+in-process fallback (works, no queue durability, no cache). To enable
+BullMQ + cache: provision **Render Key Value** (or Upstash Redis) and
+paste its URL as the `REDIS_URL` env var on the Render web service,
+then redeploy. No code change needed — the mode switches automatically.
+
+## Measured numbers
+
+Harness: `backend/tests/scanPerfHarness.js` — runs the real HTTP routes
+with stubbed Prisma/auth/RBAC/billing, a real local Redis 8.10.2, the
+real `runSecurityScan`, classifier pointed at a closed port (fail-safe
+REAL verdicts). Fixture repo: 152 files, 15 findings per scan
+(12 critical, 3 high, 6 secrets), 1227 lines. Poll interval 250 ms
+(turnaround inflated by ≤250 ms). Before = original synchronous code.
+
+| Scenario | Before submit p50 / p95 | After submit p50 / p95 | After turnaround p50 / p95 |
+| --- | --- | --- | --- |
+| Single scan | 404 / 527 ms (cold) | 5 / 6 ms | 264 / 266 ms |
+| 10 concurrent | 1897 / 3889 ms | 53 / 60 ms | 1162 / 1165 ms |
+| 100 concurrent | 3230 / 6142 ms | 351 / 716 ms | 3990 / 6745 ms |
+
+- 100-concurrent wall time (all submissions accepted): **6,499 ms → 936 ms**.
+- 100 concurrent, after: **101/101 scans completed, 0 failed**, same
+  findings per scan as before.
+- Cache: 20 sequential `GET /api/vulnerabilities` → 1 MISS + 19 HITs,
+  **hit rate 0.95** (before: 0). Latency p50 2 ms.
+
+**Honest reading.** The queue makes *submission* fast (8.6× at 100
+concurrent: 6,142 → 716 ms p95) — it does not make scans themselves
+faster. Total scan work is unchanged, so the last scan in a 100-burst
+finishes at roughly the same time as before (turnaround p95 6,142 →
+6,745 ms; the small regression is queueing + thread handoff at
+concurrency 2). What the queue buys: the API stays responsive under a
+burst instead of holding every request for seconds, and scans are
+bounded to `SCAN_WORKER_CONCURRENCY` instead of piling onto the loop.
+The single-scan before number was cold (first touch of fixture files);
+the C10/C100 comparisons are the clean ones. Cache latency is
+unmeasurable in this harness because the stub DB is in-memory — the
+measured win is the hit rate (DB reads skipped), not a local latency
+delta; in production a HIT skips a Postgres round-trip.
+
+**XYZ bullet (from these numbers only):**
+
+> Moved SecureGaurd scans off the request thread onto a BullMQ/Redis
+> queue with worker-thread execution and added a Redis read-through
+> cache, cutting 100-concurrent scan-submit p95 latency from 6,142 ms
+> to 716 ms (8.6×) with zero failed scans and a measured 95% cache hit
+> rate on vulnerability lists.
+
+## Known limitations
+
+- A crashed process leaves `queued`/`running` rows behind — no
+  stale-scan sweep yet; the user re-triggers. (BullMQ jobs survive;
+  inline jobs do not.)
+- `SCAN_WORKER_CONCURRENCY` is a single-process bound; scaling past
+  one API instance needs a shared Redis (BullMQ mode) and the
+  concurrency tuned per instance.
+- The load-test fixture is small (152 files). A large-repo burst will
+  have a longer turnaround tail; re-measure with a real repo before
+  quoting bigger numbers.

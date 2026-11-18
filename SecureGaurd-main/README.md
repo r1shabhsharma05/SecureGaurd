@@ -65,6 +65,23 @@ flowchart TD
     K -->|off| O[Default severity order]
 ```
 
+## Scan queue & cache
+
+Scans run on a worker, not in the request. `POST /api/scans/trigger`
+creates a `queued` scan and returns **202**; a BullMQ worker
+(`secureguard-scans`, concurrency `SCAN_WORKER_CONCURRENCY`, default 2)
+runs it in a pooled worker thread, then the scan row goes
+`queued → running → completed | failed`. With no `REDIS_URL` set the
+same FIFO runs in-process and the cache is bypassed — the server boots
+either way. Vulnerability lists and terminal scan results are cached in
+Redis (60–300 s TTLs, org-scoped, `X-Cache` headers); non-terminal
+scans are never cached. See
+`docs/SCAN_QUEUE_CACHE_LOADTEST.md` for the design and the measured
+numbers: 100 concurrent submissions, submit p95 **6,142 ms → 716 ms**,
+cache hit rate **0.95**, 101/101 scans completed, 0 failed. Production
+needs `REDIS_URL` set in the Render dashboard (Render Key Value or
+Upstash) or it stays on the in-process fallback.
+
 ## Requirements
 
 - Node.js 20 or newer

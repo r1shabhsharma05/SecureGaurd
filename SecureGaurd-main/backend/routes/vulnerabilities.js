@@ -6,15 +6,18 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 // SEC-31: Vulnerability is an RLS table — every read/write runs in a
 // context. createAuditLog self-wraps, so the audit calls stay as-is.
 const { withRequestOrgContext } = require('../utils/rlsContext');
+const cache = require('../utils/cache');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
 
-// GET /api/vulnerabilities — list open vulns for active organization with filters
+// GET /api/vulnerabilities — list open vulns for active organization with filters (cached 60 s, org-scoped)
 router.get('/', async (req, res) => {
   const { severity, status, scanId } = req.query;
 
   try {
+    const cacheKey = cache.keys.vulnList(req.organizationId, JSON.stringify({ severity: severity || null, status: status || null, scanId: scanId || null }));
+    const { value: vulns, hit } = await cache.getOrSet(cacheKey, cache.TTL.list, () => {
     const where = {
       scan: { organizationId: req.organizationId },
       ...(severity && { severity }),
@@ -22,7 +25,7 @@ router.get('/', async (req, res) => {
       ...(scanId && !isNaN(parseInt(scanId)) && { scanId: parseInt(scanId) }),
     };
 
-    const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
+    return withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where,
       include: {
         scan: { select: { id: true, repository: { select: { id: true, name: true, fullName: true, platform: true, language: true } } } },
@@ -33,7 +36,8 @@ router.get('/', async (req, res) => {
       ],
       take: 100,
     }));
-
+    });
+    res.set('X-Cache', hit ? 'HIT' : 'MISS');
     res.json(vulns);
   } catch (err) {
     console.error('Error fetching vulnerabilities:', err);
@@ -41,7 +45,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/vulnerabilities/:id — fetch single vulnerability details with org ownership check
+// GET /api/vulnerabilities/:id — fetch single vulnerability details with org ownership check (cached 120 s, org-scoped; 404s are never cached)
 router.get('/:id', async (req, res) => {
   const vulnId = Number(req.params.id);
   if (!vulnId || isNaN(vulnId)) {
@@ -49,6 +53,7 @@ router.get('/:id', async (req, res) => {
   }
 
   try {
+    const { value: detail, hit } = await cache.getOrSet(cache.keys.vulnDetail(req.organizationId, vulnId), cache.TTL.detail, async () => {
     const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
       where: {
         id: vulnId,
@@ -79,7 +84,7 @@ router.get('/:id', async (req, res) => {
     }));
 
     if (!vuln) {
-      return res.status(404).json({ message: 'Vulnerability not found' });
+      return null;
     }
 
     // Day 7 — occurrence history: the same finding (same rule + file) in
@@ -104,7 +109,11 @@ router.get('/:id', async (req, res) => {
       }));
     }
 
-    res.json({ ...vuln, occurrences });
+    return { ...vuln, occurrences };
+    });
+    if (!detail) return res.status(404).json({ message: 'Vulnerability not found' });
+    res.set('X-Cache', hit ? 'HIT' : 'MISS');
+    res.json(detail);
   } catch (err) {
     console.error('[Vulnerability Detail Error]', err);
     res.status(500).json({ message: 'Failed to fetch vulnerability details' });
@@ -226,6 +235,9 @@ router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
       { title: vuln.title, previousStatus: vuln.status, newStatus: status }
     );
 
+    // The row changed: drop the org's cached vuln lists/detail.
+    await cache.invalidateOrg(req.organizationId);
+
     res.json(updated);
   } catch (err) {
     console.error('Error updating status:', err);
@@ -266,6 +278,9 @@ router.patch('/:id/label', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asyn
       String(vuln.id),
       { title: vuln.title, previousLabel: vuln.userLabel, label, labeledAt: new Date().toISOString() }
     );
+
+    // The row changed: drop the org's cached vuln lists/detail.
+    await cache.invalidateOrg(req.organizationId);
 
     res.json({ success: true, id: updated.id, userLabel: updated.userLabel });
   } catch (err) {

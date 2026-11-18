@@ -301,9 +301,21 @@ export const OnboardingWizard: React.FC = () => {
         const data = await scanRes.json();
         const scanObj = data.scan;
 
-        // Fetch detailed scan info to preview findings
-        const detailRes = await authFetch(`/api/scans/${scanObj.id}`, {}, accessToken, refreshSession);
-        const detailData = await detailRes.json();
+        // The trigger returns 202 with a QUEUED scan: poll the real scan
+        // record until it reaches a terminal status before reading the
+        // findings — reading immediately would show an empty scan.
+        let detailData: any = null;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const detailRes = await authFetch(`/api/scans/${scanObj.id}`, {}, accessToken, refreshSession);
+          if (!detailRes.ok) break;
+          detailData = await detailRes.json();
+          if (detailData.status === 'completed' || detailData.status === 'failed') break;
+          setScanStatusText(`Scan ${detailData.status}…`);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        if (!detailData || detailData.status !== 'completed') {
+          throw new Error(detailData?.status === 'failed' ? 'Scan failed. See scan history for details.' : 'Scan is still running — check scan history for results.');
+        }
 
         const tasteFindings: FindingTaste[] = (detailData.vulnerabilities || []).slice(0, 5).map((v: any) => ({
           id: v.id,
@@ -313,15 +325,17 @@ export const OnboardingWizard: React.FC = () => {
           filePath: v.filePath
         }));
 
+        // Real numbers only: the queued scan row starts at 0, the
+        // completed detail carries the measured counts (no fallbacks).
         const summary: ScanSummary = {
           id: scanObj.id,
-          totalFiles: scanObj.totalFiles || 18,
-          totalLines: scanObj.totalLines || 1420,
-          criticalCount: scanObj.criticalCount || 0,
-          highCount: scanObj.highCount || 0,
-          mediumCount: scanObj.mediumCount || 0,
-          lowCount: scanObj.lowCount || 0,
-          durationMs: scanObj.durationMs || 840,
+          totalFiles: detailData.totalFiles || 0,
+          totalLines: detailData.totalLines || 0,
+          criticalCount: detailData.criticalCount || 0,
+          highCount: detailData.highCount || 0,
+          mediumCount: detailData.mediumCount || 0,
+          lowCount: detailData.lowCount || 0,
+          durationMs: detailData.durationMs || 0,
           findings: tasteFindings
         };
 

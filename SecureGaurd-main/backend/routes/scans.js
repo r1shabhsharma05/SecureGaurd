@@ -7,14 +7,11 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
 const { checkCanTriggerScan } = require('../services/billingService');
-const { execFileSync } = require('child_process');
-const { runSecurityScan } = require('../utils/securityScanner');
-const { storedRuleToParsed } = require('../utils/customRules');
-const { mapRuleId } = require('../utils/ruleMap');
-const { resolveScanTarget } = require('../utils/repoScanSource');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
 const { scanAPISpecFile } = require('../utils/apiSpecScanner');
 const { validateBody, validateQuery, scanTriggerSchema, zPagination } = require('../utils/validation');
+const { enqueueScan, getQueueStats } = require('../queues/scanQueue');
+const cache = require('../utils/cache');
 // SEC-31: Scan/Vulnerability/Sbom/CustomRule/Repository are RLS tables.
 // Plain handlers run through withRequestOrgContext (tx replaces prisma).
 // POST /trigger interleaves minutes of scanning + classifier HTTP calls
@@ -22,31 +19,6 @@ const { validateBody, validateQuery, scanTriggerSchema, zPagination } = require(
 // segment gets its own short context instead. dispatchScanAlerts takes
 // the handler's tx when one exists (see the call site).
 const { withRequestOrgContext, withUserContext, withOrgContext } = require('../utils/rlsContext');
-
-// ─── ML feature: file change frequency from git history ─────────────────────
-// The FP classifier was trained with file_change_frequency in 0..50
-// (see backend/services/fp-classifier/generate_sample_data.py), but scans used
-// to send a hardcoded 0, making the feature dead weight in production. Counting
-// commits via `git log` keeps production inputs in-distribution. Falls back to
-// 0 when git is unavailable or the scan target is not a git checkout.
-const MAX_FILE_CHANGE_FREQUENCY = 50;
-function getFileChangeFrequency(scanRoot, relFilePath, cache) {
-  const cacheKey = `${scanRoot}::${relFilePath}`;
-  if (cache.has(cacheKey)) return cache.get(cacheKey);
-  let count = 0;
-  try {
-    const out = execFileSync('git', ['-C', scanRoot, 'log', '--format=%H', '--', relFilePath], {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    count = Math.min(out.split('\n').filter(Boolean).length, MAX_FILE_CHANGE_FREQUENCY);
-  } catch (err) {
-    count = 0;
-  }
-  cache.set(cacheKey, count);
-  return count;
-}
 
 // GET /api/scans/export-feedback — export user feedback labels for retraining.
 // Two caller kinds: the classifier service (shared CLASSIFIER_API_KEY header,
@@ -131,10 +103,23 @@ router.get('/export-feedback', validateQuery(zPagination), async (req, res, next
 router.use(authMiddleware);
 router.use(requireOrgContext);
 
-// GET /api/scans — list scans for active organization
+// GET /api/scans/queue/stats — queue depth + cache hit rate (ops visibility).
+// Defined BEFORE /:id so "queue" is not read as a scan id.
+router.get('/queue/stats', async (req, res) => {
+  try {
+    const stats = await getQueueStats();
+    res.json({ ...stats, cache: cache.getStats() });
+  } catch (err) {
+    console.error('Error fetching queue stats:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/scans — list scans for active organization (cached 60 s, org-scoped)
 router.get('/', async (req, res) => {
   try {
-    const scans = await withRequestOrgContext(req, (tx) => tx.scan.findMany({
+    const { value: scans, hit } = await cache.getOrSet(cache.keys.scanList(req.organizationId), cache.TTL.list, () =>
+      withRequestOrgContext(req, (tx) => tx.scan.findMany({
       where: { organizationId: req.organizationId },
       include: {
         repository: { select: { name: true, fullName: true, platform: true } },
@@ -142,7 +127,8 @@ router.get('/', async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
       take: 50,
-    }));
+    })));
+    res.set('X-Cache', hit ? 'HIT' : 'MISS');
     res.json(scans);
   } catch (err) {
     console.error('Error listing scans:', err);
@@ -150,12 +136,19 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/scans/:id — single scan with vulnerabilities
+// GET /api/scans/:id — single scan with vulnerabilities.
+// Only TERMINAL scans are cached: queued/running rows change every poll,
+// and a cached "running" would lie to the dashboard's 2 s poller.
 router.get('/:id', async (req, res) => {
   const scanId = parseInt(req.params.id);
   if (isNaN(scanId)) return res.status(400).json({ message: 'Invalid scan ID' });
 
   try {
+    const found = await cache.get(cache.keys.scanDetail(req.organizationId, scanId));
+    if (found.hit) {
+      res.set('X-Cache', 'HIT');
+      return res.json(found.value);
+    }
     const scan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { id: scanId, organizationId: req.organizationId },
       include: {
@@ -164,6 +157,12 @@ router.get('/:id', async (req, res) => {
       },
     }));
     if (!scan) return res.status(404).json({ message: 'Scan not found' });
+    if (scan.status === 'completed' || scan.status === 'failed') {
+      await cache.set(cache.keys.scanDetail(req.organizationId, scanId), scan, cache.TTL.terminalScan);
+      res.set('X-Cache', 'MISS');
+    } else {
+      res.set('X-Cache', 'BYPASS');
+    }
     res.json(scan);
   } catch (err) {
     console.error('Error fetching scan:', err);
@@ -179,14 +178,17 @@ const scanTriggerLimiter = rateLimit({
   message: { message: 'Too many scan requests triggered. Please wait before triggering another scan.' },
 });
 
-// POST /api/scans/trigger — trigger a real SAST/Secret scan for an organization repo
+// POST /api/scans/trigger — enqueue a real SAST/Secret scan for an org repo.
+// Async since the queue landed: the scan runs on a worker (BullMQ/Redis
+// when REDIS_URL is set, in-process otherwise), so this returns 202 with
+// the queued scan row instead of blocking the request for the whole scan.
+// Poll GET /api/scans/:id for queued → running → completed/failed.
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(scanTriggerSchema), async (req, res) => {
   // validateBody(scanTriggerSchema) already proved repositoryId a positive
   // integer; it arrives here as a number, never "12abc".
   const { repositoryId } = req.body;
 
-  let scanTarget = null;
   try {
     // Entitlement Check: Monthly Scan Limit (own short RLS context —
     // the limit counts are tenant-table reads and must not run free).
@@ -213,306 +215,46 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
     }));
     if (!repo) return res.status(404).json({ message: 'Repository not found in active organization' });
 
-    // Scan the CONNECTED repository's own tree (clone/path resolution),
-    // never SecureGaurd's own checkout. No reachable source → honest failure.
-    try {
-      scanTarget = resolveScanTarget(repo);
-    } catch (resolveErr) {
-      const failedScan = await withRequestOrgContext(req, (tx) => tx.scan.create({
-        data: {
-          userId: req.userId,
-          organizationId: req.organizationId,
-          repositoryId: repo.id,
-          status: 'failed',
-          branch: 'main',
-          completedAt: new Date(),
-        },
-      }));
-      await createAuditLog(
-        req.organizationId,
-        req.userId,
-        'SCAN_FAILED',
-        'SCAN',
-        String(failedScan.id),
-        { repoName: repo.name, reason: resolveErr.message }
-      );
-      return res.status(422).json({ message: `Scan failed: ${resolveErr.message}`, scanId: failedScan.id });
-    }
-    const scanPath = scanTarget.scanPath;
-
-    // Day 10 — enabled org custom rules fire in this scan. Loading them
-    // must never fail the scan: a missing table (pre-migration deploy) or
-    // a bad row degrades to built-in rules only, and the scan still runs.
-    let customRules = [];
-    try {
-      const customRows = await withRequestOrgContext(req, (tx) => tx.customRule.findMany({
-        where: { organizationId: req.organizationId, enabled: true },
-        orderBy: { ruleId: 'asc' },
-      }));
-      customRules = customRows.map(storedRuleToParsed);
-    } catch (customErr) {
-      console.error('Custom rules unavailable, scanning with built-in rules only:', customErr.message);
-    }
-
-    // Execute real security scan over the repository's tree
-    const scanResult = runSecurityScan(scanPath, customRules);
-
-    // Per-scan cache for git-based file change frequency lookups
-    const freqCache = new Map();
-
-    // Append ML Features
-    for (let finding of scanResult.findings) {
-      if (finding.mlFeatures) {
-        const seenCount = await withRequestOrgContext(req, (tx) => tx.vulnerability.count({
-          where: {
-            ruleId: finding.ruleId,
-            filePath: finding.filePath,
-            scan: { repositoryId: repo.id }
-          }
-        }));
-        finding.mlFeatures.same_finding_seen_before_count = seenCount;
-
-        const dismissedCount = await withRequestOrgContext(req, (tx) => tx.vulnerability.count({
-          where: {
-            ruleId: finding.ruleId,
-            status: 'ignored',
-            scan: { repositoryId: repo.id }
-          }
-        }));
-        // Classifier schema field is 0/1 — send "was a similar finding ever
-        // dismissed", not the raw dismissal count.
-        finding.mlFeatures.developer_dismissed_similar_before = dismissedCount > 0 ? 1 : 0;
-        finding.mlFeatures.file_change_frequency = getFileChangeFrequency(scanPath, finding.filePath, freqCache);
-
-        finding.mlFeatures.rule_id = mapRuleId(finding.ruleId);
-        finding.mlFeatures.cwe_id = finding.cweId;
-      }
-    }
-
-    // ML Classifier Batch Query
-    let finalFindings = scanResult.findings;
-    const sastFindings = scanResult.findings.filter(f => f.mlFeatures);
-    
-    if (sastFindings.length > 0) {
-      const BATCH_SIZE = 50;
-      const results = [];
-      const CLASSIFIER_URL = process.env.FP_CLASSIFIER_URL || "http://localhost:8001";
-      const headers = { 'Content-Type': 'application/json' };
-      if (process.env.CLASSIFIER_API_KEY) {
-        headers['X-SecureGuard-Key'] = process.env.CLASSIFIER_API_KEY;
-      }
-
-      for (let i = 0; i < sastFindings.length; i += BATCH_SIZE) {
-        const chunk = sastFindings.slice(i, i + BATCH_SIZE);
-        const payload = { findings: chunk.map(f => f.mlFeatures) };
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-        try {
-          const response = await fetch(`${CLASSIFIER_URL}/classify/batch`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-
-          if (response.ok) {
-            const batchResult = await response.json();
-            results.push(...(batchResult.results || []));
-          } else {
-            results.push(...Array(chunk.length).fill(null));
-          }
-        } catch (err) {
-          clearTimeout(timeoutId);
-          results.push(...Array(chunk.length).fill(null));
-        }
-      }
-
-      const processedSastFindings = sastFindings.map((f, idx) => {
-        const classifierResult = results[idx];
-        // The classifier was trained on SAST features only. IaC/API-spec
-        // findings carry no SAST signals, so a model verdict on them is a
-        // guess from neutral defaults — never let it suppress such a finding.
-        const isNonSast = !!(f.mlFeatures.isIaC || f.mlFeatures.isApi);
-        const pred = isNonSast ? 'REAL' : (classifierResult?.prediction || 'REAL');
-        const explanations = classifierResult?.explanations || [];
-
-        return {
-          ...f,
-          status: pred === 'FALSE_POSITIVE' ? 'ignored' : 'open',
-          mlFeatures: {
-            ...f.mlFeatures,
-            ml_prediction: pred,
-            // classifierResult is null when the classifier was unreachable or timed
-            // out; keep the 1.0 fail-safe confidence in that case.
-            ml_confidence: classifierResult?.confidence ?? 1.0,
-            ml_explanation: explanations
-          }
-        };
-      });
-
-      finalFindings = [
-        ...scanResult.findings.filter(f => !f.mlFeatures).map(f => ({ ...f, status: 'open' })),
-        ...processedSastFindings
-      ];
-    }
-
-    const critCount = finalFindings.filter(f => f.status === 'open' && f.severity === 'critical').length;
-    const highCount = finalFindings.filter(f => f.status === 'open' && f.severity === 'high').length;
-    const medCount  = finalFindings.filter(f => f.status === 'open' && f.severity === 'medium').length;
-    const lowCount  = finalFindings.filter(f => f.status === 'open' && f.severity === 'low').length;
-    const secrets   = finalFindings.filter(f => f.status === 'open' && f.type === 'secret').length;
-
+    // Create the queued scan row first — the worker picks it up by id and
+    // moves it queued → running → completed/failed. The row is the poll
+    // handle: GET /api/scans/:id is what the dashboard already polls.
     const scan = await withRequestOrgContext(req, (tx) => tx.scan.create({
       data: {
         userId: req.userId,
         organizationId: req.organizationId,
         repositoryId: repo.id,
-        status: 'completed',
+        status: 'queued',
         branch: 'main',
-        totalFiles: scanResult.totalFiles,
-        totalLines: scanResult.totalLines,
-        criticalCount: critCount,
-        highCount: highCount,
-        mediumCount: medCount,
-        lowCount: lowCount,
-        secretsFound: secrets,
-        durationMs: scanResult.durationMs,
-        completedAt: new Date(),
       },
     }));
-
-    if (finalFindings.length > 0) {
-      const dbFindings = finalFindings.map(f => ({
-        scanId: scan.id,
-        ruleId: f.ruleId,
-        cweId: f.cweId,
-        type: f.type,
-        severity: f.severity,
-        title: f.title,
-        filePath: f.filePath,
-        lineStart: f.lineStart,
-        lineEnd: f.lineEnd,
-        codeSnippet: f.codeSnippet,
-        // Persist the classifier outcome: suppressed FPs stay 'ignored' so
-        // list views and stats (which count open only) agree with counters.
-        status: f.status || 'open',
-        mlFeatures: f.mlFeatures ? f.mlFeatures : null
-      }));
-      await withRequestOrgContext(req, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
-    }
-
-    const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';
-    await withRequestOrgContext(req, (tx) => tx.repository.update({
-      where: { id: repo.id },
-      data: { riskLevel, updatedAt: new Date() },
-    }));
-
-    // Generate & Store SPDX 2.3 + CycloneDX 1.6 Software Bills of Materials
-    // (SBOM) — both from the same component list, so they cannot disagree.
-    try {
-      const { generateSpdxDocument } = require('../utils/spdxGenerator');
-      const { validateSpdxDocument } = require('../utils/spdxValidator');
-      const { generateCycloneDxDocument, validateCycloneDxDocument } = require('../utils/cycloneDxGenerator');
-
-      const { spdxDocument, summaryStats: sbomStats } = generateSpdxDocument({
-        repository: repo,
-        scanId: scan.id,
-        components: scanResult.sbomComponents || [],
-        vulnerabilities: finalFindings
-      });
-      const { cycloneDxDocument } = generateCycloneDxDocument({
-        repository: repo,
-        scanId: scan.id,
-        components: scanResult.sbomComponents || [],
-      });
-      // Never persist an invalid CycloneDX doc: log and store null (the
-      // SPDX row still saves) rather than serving a broken download.
-      const cycloneValid = validateCycloneDxDocument(cycloneDxDocument);
-      if (!cycloneValid.isValid) console.error('CycloneDX invalid, not stored:', cycloneValid.errors);
-
-      const validation = validateSpdxDocument(spdxDocument);
-      // If SPDX is invalid, log the errors and still store the valid
-      // CycloneDX document instead of silently dropping both formats.
-      // spdxDoc is a required column, so the stored SPDX is a minimal
-      // valid document (root package only) whose comment records the
-      // validation failure; the generated invalid SPDX is never persisted.
-      let spdxToStore = null;
-      if (validation.isValid) {
-        spdxToStore = spdxDocument;
-      } else {
-        console.error('SPDX invalid, storing CycloneDX only:', validation.errors);
-        if (cycloneValid.isValid) {
-          const rootPkg = spdxDocument.packages[0];
-          spdxToStore = {
-            ...spdxDocument,
-            packages: [{ ...rootPkg, comment: `SPDX generation failed validation (${validation.errors.join('; ')}); see the stored CycloneDX document.` }],
-            relationships: spdxDocument.relationships.filter((r) => r.relatedSpdxElement === rootPkg.SPDXID),
-          };
-        }
-      }
-      if (spdxToStore) {
-        await withRequestOrgContext(req, (tx) => tx.sbom.create({
-          data: {
-            organizationId: req.organizationId,
-            repositoryId: repo.id,
-            scanId: scan.id,
-            spdxVersion: 'SPDX-2.3',
-            dataLicense: 'CC0-1.0',
-            documentNamespace: spdxDocument.documentNamespace,
-            name: spdxDocument.name,
-            componentCount: sbomStats.componentCount,
-            directCount: sbomStats.directCount,
-            transitiveCount: sbomStats.transitiveCount,
-            vulnerableCount: sbomStats.vulnerableCount,
-            ecosystems: sbomStats.ecosystems,
-            spdxDoc: spdxToStore,
-            cycloneDxDoc: cycloneValid.isValid ? cycloneDxDocument : null
-          }
-        }));
-
-        await createAuditLog(
-          req.organizationId,
-          req.userId,
-          'SBOM_GENERATED',
-          'SBOM',
-          String(scan.id),
-          { repoName: repo.name, componentCount: sbomStats.componentCount, vulnerableCount: sbomStats.vulnerableCount }
-        );
-      } else {
-        console.error('SBOM not stored: both SPDX and CycloneDX documents are invalid');
-      }
-    } catch (sbomErr) {
-      console.error('Error generating SBOM during scan:', sbomErr);
-    }
-
     await createAuditLog(
       req.organizationId,
       req.userId,
-      'SCAN_COMPLETED',
+      'SCAN_QUEUED',
       'SCAN',
       String(scan.id),
-      { repoName: repo.name, findingsCount: finalFindings.length, criticalCount: critCount }
+      { repoName: repo.name }
     );
 
-    // Day 7 — opt-in scan-completion alerts (Slack + email). Best-effort:
-    // the dispatcher never throws, so a failed alert cannot fail a scan.
+    // Enqueue: the worker resolves the repo source (clone/local path),
+    // scans, classifies, persists findings + SBOM, and invalidates the
+    // cache on completion. A clone/resolve failure marks the scan
+    // 'failed' in the worker — the trigger itself only fails if the job
+    // cannot be queued at all.
     try {
-      const { dispatchScanAlerts } = require('../utils/scanAlerts');
-      // Own short context: without it the AlertSetting lookup (an RLS
-      // table) returns zero rows and no alert is ever sent.
-      await withRequestOrgContext(req, (tx) => dispatchScanAlerts({ organizationId: req.organizationId, scan, repository: repo, tx }));
-    } catch (alertErr) {
-      console.error('Scan alert dispatch failed (scan itself succeeded):', alertErr.message);
+      await enqueueScan({ scanId: scan.id, organizationId: req.organizationId, userId: req.userId, repositoryId: repo.id });
+    } catch (queueErr) {
+      console.error('Error queueing scan:', queueErr);
+      await withRequestOrgContext(req, (tx) => tx.scan.update({
+        where: { id: scan.id },
+        data: { status: 'failed', completedAt: new Date() },
+      }));
+      return res.status(503).json({ message: 'Scan could not be queued. Please try again.', scanId: scan.id });
     }
 
-    if (scanTarget) scanTarget.cleanup();
-    res.status(201).json({ scan, message: `Scan completed. Evaluated ${scanResult.totalFiles} files. Found ${finalFindings.length} real issues.` });
+    return res.status(202).json({ scan, message: `Scan queued. Poll GET /api/scans/${scan.id} for progress.` });
   } catch (err) {
-    if (scanTarget) scanTarget.cleanup();
-    console.error('Error running scan:', err);
+    console.error('Error queueing scan:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -587,31 +329,35 @@ router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', '
   }
 });
 
-// GET /api/scans/stats/summary — dashboard summary stats for active organization
+// GET /api/scans/stats/summary — dashboard summary stats for active organization (cached 30 s, org-scoped)
 router.get('/stats/summary', async (req, res) => {
   try {
-    const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
-      where: {
-        scan: { organizationId: req.organizationId },
-        status: 'open',
-      },
-      select: { severity: true },
-    }));
+    const { value: summary, hit } = await cache.getOrSet(cache.keys.scanSummary(req.organizationId), cache.TTL.summary, async () => {
+      const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
+        where: {
+          scan: { organizationId: req.organizationId },
+          status: 'open',
+        },
+        select: { severity: true },
+      }));
 
-    const critical = vulns.filter(v => v.severity === 'critical').length;
-    const high     = vulns.filter(v => v.severity === 'high').length;
-    const medium   = vulns.filter(v => v.severity === 'medium').length;
-    const low      = vulns.filter(v => v.severity === 'low').length;
-    const total    = vulns.length;
-    const health   = Math.max(0, 100 - critical * 15 - high * 8 - medium * 3 - low);
+      const critical = vulns.filter(v => v.severity === 'critical').length;
+      const high     = vulns.filter(v => v.severity === 'high').length;
+      const medium   = vulns.filter(v => v.severity === 'medium').length;
+      const low      = vulns.filter(v => v.severity === 'low').length;
+      const total    = vulns.length;
+      const health   = Math.max(0, 100 - critical * 15 - high * 8 - medium * 3 - low);
 
-    const lastScan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
-      where: { organizationId: req.organizationId, status: 'completed' },
-      orderBy: { createdAt: 'desc' },
-      select: { durationMs: true, totalFiles: true, createdAt: true },
-    }));
+      const lastScan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
+        where: { organizationId: req.organizationId, status: 'completed' },
+        orderBy: { createdAt: 'desc' },
+        select: { durationMs: true, totalFiles: true, createdAt: true },
+      }));
 
-    res.json({ critical, high, medium, low, total, health, lastScan });
+      return { critical, high, medium, low, total, health, lastScan };
+    });
+    res.set('X-Cache', hit ? 'HIT' : 'MISS');
+    res.json(summary);
   } catch (err) {
     console.error('Error fetching summary stats:', err);
     res.status(500).json({ message: 'Server error' });
