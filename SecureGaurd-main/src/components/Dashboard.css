@@ -764,6 +764,10 @@
 @media (max-width: 1100px) {
   .stats-grid { grid-template-columns: repeat(3, 1fr); }
   .detail-panel { display: none; }
+  /* At ~1034px the fixed 240px sidebar leaves only ~794px for the header,
+     whose search (220px) + org switcher + scan button cannot fit on one
+     row — with no flex-wrap the buttons clipped instead of wrapping. */
+  .dash-header { flex-wrap: wrap; }
 }
 
 /* ── Mobile nav toggle + backdrop (SEC-39) ────────────────────────────────

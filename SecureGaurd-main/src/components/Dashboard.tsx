@@ -27,10 +27,12 @@ const AlertsSettings = lazy(() => import('./AlertsSettings'));
 const ProductInsights = lazy(() => import('./ProductInsights'));
 import { filterVulns, filterRepos } from '../utils/vulnFilters';
 import { fixedPercentage } from '../utils/vulnStats';
+import { formatVulnId } from '../utils/formatVulnId';
 import { apiUrl } from '../config/api';
 import {
   SEVERITY_FILTER_OPTIONS,
   SCAN_TYPE_FILTER_OPTIONS,
+  STATUS_FILTER_OPTIONS,
 } from '../config/filterOptions';
 import './Dashboard.css';
 
@@ -71,6 +73,7 @@ interface Scan {
   lowCount: number;
   durationMs: number;
   completedAt: string | null;
+  errorMessage?: string | null;
   createdAt: string;
   repository: {
     name: string;
@@ -144,8 +147,20 @@ export default function Dashboard() {
     }
   };
   
-  // Navigation
-  const [activeNav, setActiveNav] = useState('overview');
+  // Navigation — the active tab lives in ?tab= so a refresh keeps the
+  // user on the tab they were on (previously tab state was memory-only
+  // and a refresh silently dropped back to Overview).
+  const [activeNav, setActiveNav] = useState(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    return tab && tab in { overview: 1, repos: 1, scans: 1, vulndb: 1, analytics: 1, compliance: 1, sbom: 1, rules: 1, alerts: 1, settings: 1 } ? tab : 'overview';
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', activeNav);
+    window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
+  }, [activeNav]);
+  // Back to page 1 whenever a Vuln DB filter changes.
+  useEffect(() => { setVulnPage(1); }, [filterSev, filterType, filterStatus, searchQuery]);
   // SEC-39 — mobile nav: the sidebar is display:none ≤768px, so without
   // this the 10 nav items are unreachable on a phone.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -157,6 +172,37 @@ export default function Dashboard() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
+
+  // Profile name edit — there was no way to fix a name typed wrong at
+  // signup short of a database edit (PATCH /api/auth/me is new).
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const [nameError, setNameError] = useState('');
+  useEffect(() => {
+    if (user) { setEditFirstName(user.firstName); setEditLastName(user.lastName); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.firstName, user?.lastName]);
+
+  const handleSaveName = async () => {
+    if (!accessToken) return;
+    setSavingName(true);
+    setNameError('');
+    try {
+      const res = await authFetch('/api/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify({ firstName: editFirstName.trim(), lastName: editLastName.trim() }),
+      }, accessToken, refreshSession, () => accessToken);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setNameError(data.message || 'Could not update your name.'); return; }
+      await refreshSession();
+      pushToast('success', 'Name updated.');
+    } catch {
+      setNameError('Could not update your name. Check your connection and try again.');
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   // SEC-09 / SEC-38 — change password + email verification status.
   const [currentPassword, setCurrentPassword] = useState('');
@@ -250,8 +296,16 @@ export default function Dashboard() {
   }, []);
   const [filterSev, setFilterSev] = useState<string>('ALL');
   const [filterType, setFilterType] = useState<string>('ALL');
+  // Finding lifecycle filter for the Vuln DB tab. Default OPEN matches the
+  // list API default and the dashboard summary — every surface counts the
+  // same rows. 'ALL' passes ?status= explicitly to see everything.
+  const [filterStatus, setFilterStatus] = useState<string>('OPEN');
+  const [vulnPage, setVulnPage] = useState(1);
+  const [vulnTotal, setVulnTotal] = useState(0);
+  const VULN_PAGE_SIZE = 25;
   const [searchQuery, setSearchQuery] = useState('');
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [connectingRepo, setConnectingRepo] = useState(false);
 
   // New Repository Form Fields
   const [newRepoName, setNewRepoName] = useState('');
@@ -322,10 +376,13 @@ export default function Dashboard() {
         });
       }
 
-      // 3. Fetch vulnerabilities
-      const vulnsRes = await orgFetch('/api/vulnerabilities');
+      // 3. Fetch vulnerabilities — ?status= so the list counts the same
+      // rows as the dashboard summary (open by default). X-Total-Count is
+      // the unpaged total for pagination.
+      const vulnsRes = await orgFetch(`/api/vulnerabilities?status=${filterStatus.toLowerCase()}&limit=200`);
       if (vulnsRes.ok) {
         const vulnsData = await vulnsRes.json();
+        setVulnTotal(Number(vulnsRes.headers.get('X-Total-Count') || vulnsData.length));
         setVulns(vulnsData);
         if (vulnsData.length > 0) {
           setSelectedVuln((prev: any) => {
@@ -357,7 +414,7 @@ export default function Dashboard() {
     } finally {
       setDataLoading(false);
     }
-  }, [accessToken, orgFetch]);
+  }, [accessToken, orgFetch, filterStatus]);
 
   // (Initial data load is handled by the effect below, which also waits for user.)
 
@@ -425,30 +482,6 @@ export default function Dashboard() {
     }
   }, [isConnectModalOpen, newRepoPlatform, hasGithubToken, hasGitlabToken, fetchRemoteRepos]);
 
-  // Seed default repository if none connected in active organization
-  useEffect(() => {
-    const seedDefaultRepo = async () => {
-      if (user && accessToken && activeOrgId && repos.length === 0) {
-        try {
-          await orgFetch('/api/repos', {
-            method: 'POST',
-            body: JSON.stringify({
-              name: 'secureguard-main',
-              fullName: `${user.firstName.toLowerCase()}/secureguard-main`,
-              url: `https://github.com/${user.firstName.toLowerCase()}/secureguard-main`,
-              platform: 'github',
-              language: 'TypeScript'
-            })
-          });
-          fetchData();
-        } catch (e) {
-          console.error(e);
-        }
-      }
-    };
-    seedDefaultRepo();
-  }, [repos, user, accessToken, activeOrgId, fetchData, orgFetch]);
-
   const handleLogout = async () => {
     await logout();
     navigate('/');
@@ -456,7 +489,8 @@ export default function Dashboard() {
 
   const handleAddRepo = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!accessToken) return;
+    if (!accessToken || connectingRepo) return;
+    setConnectingRepo(true);
     try {
       const res = await orgFetch('/api/repos', {
         method: 'POST',
@@ -468,18 +502,26 @@ export default function Dashboard() {
           language: newRepoLang
         })
       });
+      // The error body is not guaranteed JSON (a proxy/network failure has
+      // none) — parse defensively, and never swallow a failure silently:
+      // the old code threw into a console-only catch and left the modal
+      // open with nothing added.
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setIsConnectModalOpen(false);
         setNewRepoName('');
         setNewRepoFullName('');
         setNewRepoUrl('');
+        pushToast('success', 'Repository connected.');
         fetchData();
       } else {
-        const errData = await res.json();
-        pushToast('error', errData.message || 'Failed to connect repository.');
+        pushToast('error', (data as any).message || 'Failed to connect repository.');
       }
     } catch (err) {
       console.error(err);
+      pushToast('error', 'Could not reach the server. Check your connection and try again.');
+    } finally {
+      setConnectingRepo(false);
     }
   };
 
@@ -509,8 +551,15 @@ export default function Dashboard() {
   // GET /api/scans/:id (same endpoint the onboarding wizard reads).
   // POST /api/scans/trigger returns 202 with the queued scan row; the
   // poll below watches GET /api/scans/:id until it reaches completed/failed.
-  const triggerScan = async () => {
-    if (scanning || !selectedRepo || !accessToken) return;
+  // Takes the repo explicitly: the repos-tab "Scan Now" button used to
+  // setSelectedRepo(r) then call triggerScan() in the same tick, and React
+  // state updates are async — so it scanned the PREVIOUSLY selected repo.
+  // A confirm stops accidental scans (the old button fired on one click).
+  const triggerScan = async (repoOverride?: Repository) => {
+    const repo = repoOverride ?? selectedRepo;
+    if (scanning || !repo || !accessToken) return;
+    if (!window.confirm(`Start a security scan of ${repo.fullName}?`)) return;
+    if (repoOverride) setSelectedRepo(repoOverride);
     setScanning(true);
     setScanStatusText('Starting scan…');
 
@@ -525,10 +574,11 @@ export default function Dashboard() {
     const pollScanStatus = (scanId: number) =>
       new Promise<string>((resolve) => {
         let attempts = 0;
+        const startedAt = Date.now();
         scanPollRef.current = setInterval(async () => {
           attempts += 1;
           try {
-            const res = await orgFetch(`/api/scans/${scanId}`);
+            const res = await orgFetch(`/api/scans/${scanId}`, { signal: AbortSignal.timeout(15000) });
             if (res.ok) {
               const scan = await res.json();
               if (scan.status === 'completed' || scan.status === 'failed') {
@@ -541,8 +591,10 @@ export default function Dashboard() {
           } catch (err) {
             console.error(err);
           }
-          if (attempts >= 60) {
-            // ~2 min cap; the scan record stays queryable in scan history.
+          // ~2 min attempt cap AND a 5 min wall-clock deadline: without
+          // the deadline a hung request left the button on "Scanning…"
+          // forever (fetch has no default timeout).
+          if (attempts >= 60 || Date.now() - startedAt > 5 * 60 * 1000) {
             stopPolling();
             resolve('unknown');
           }
@@ -550,10 +602,20 @@ export default function Dashboard() {
       });
 
     try {
-      const res = await orgFetch('/api/scans/trigger', {
-        method: 'POST',
-        body: JSON.stringify({ repositoryId: selectedRepo.id })
-      });
+      // 30 s timeout on the trigger itself: a stalled backend used to
+      // leave `scanning` true until refresh because finally never ran.
+      const triggerController = new AbortController();
+      const triggerTimeout = setTimeout(() => triggerController.abort(), 30000);
+      let res: Response;
+      try {
+        res = await orgFetch('/api/scans/trigger', {
+          method: 'POST',
+          body: JSON.stringify({ repositoryId: repo.id }),
+          signal: triggerController.signal,
+        });
+      } finally {
+        clearTimeout(triggerTimeout);
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         // 422 carries the failed scan's id — confirm its real status.
@@ -567,7 +629,7 @@ export default function Dashboard() {
         const finalStatus = await pollScanStatus(scanId);
         await fetchData();
         if (finalStatus === 'completed') {
-          trackEvent('scan_started', { repositoryId: selectedRepo.id });
+          trackEvent('scan_started', { repositoryId: repo.id });
           pushToast('success', 'Scan completed.');
         } else if (finalStatus === 'failed') {
           pushToast('error', 'Scan failed. See scan history for details.');
@@ -581,7 +643,9 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error(err);
-      pushToast('error', 'Failed to start scan. Check your connection and try again.');
+      pushToast('error', err instanceof DOMException && err.name === 'AbortError'
+        ? 'Scan request timed out. The server may still be starting — check scan history before retrying.'
+        : 'Failed to start scan. Check your connection and try again.');
     } finally {
       stopPolling();
       setScanning(false);
@@ -716,6 +780,28 @@ export default function Dashboard() {
       })
     : filteredVulns;
 
+  // Scan Activity chart — real data. The old chart rendered 12 hardcoded
+  // bars ([4, 8, 3, 12, …]) that were not scan data at all. Bars 0-11 are
+  // the findings recorded by completed scans on each of the last 12 days;
+  // the "Now" bar is the current open total from the summary.
+  const activityBars = (() => {
+    const now = new Date();
+    const days: { label: string; count: number }[] = [];
+    for (let i = 12; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const key = d.toDateString();
+      const count = i === 0
+        ? stats.total
+        : scans
+            .filter((s) => s.status === 'completed' && new Date(s.createdAt).toDateString() === key)
+            .reduce((sum, s) => sum + s.criticalCount + s.highCount + s.mediumCount + s.lowCount, 0);
+      days.push({ label: i === 0 ? 'Now' : ['S', 'M', 'T', 'W', 'T', 'F', 'S'][d.getDay()], count });
+    }
+    return days;
+  })();
+  const activityMax = Math.max(1, ...activityBars.map((b) => b.count));
+
   const toggleRankMode = useCallback(async () => {
     if (rankMode === 'ai') { setRankMode('severity'); return; }
     const ids = filteredVulns.map((v) => v.id);
@@ -747,6 +833,10 @@ export default function Dashboard() {
   const CI_CD_YAML = [
     'name: SecureGuard Security Scan',
     '',
+    '# NOTE: the webhook verifies X-Hub-Signature-256 against the per-repo',
+    '# webhook secret, shown once when the repository was connected. If the',
+    '# secret is lost, disconnect and re-connect the repository to mint a new one.',
+    '',
     'on:',
     '  pull_request:',
     '    branches: [main, develop]',
@@ -758,7 +848,7 @@ export default function Dashboard() {
     '      - uses: actions/checkout@v3',
     '      - name: Trigger SecureGuard Scan',
     '        run: |',
-    '          curl -X POST https://YOUR_SECUREGUARD_URL/api/integration/webhook/github \\',
+    `          curl -X POST ${apiUrl('/api/integration/webhook/github')} \\`,
     '            -H "Content-Type: application/json" \\',
     "            -d '{ \"repository\": { \"full_name\": \"$GH_REPO\" }, \"after\": \"$GH_SHA\", \"ref\": \"refs/heads/$GH_BRANCH\" }'",
   ].join('\n');
@@ -918,7 +1008,9 @@ export default function Dashboard() {
               {activeNav === 'overview' && (
                 <>
                   Monitoring{' '}
-                  {selectedRepo ? (
+                  {dataLoading ? (
+                    <span className="highlight">Loading…</span>
+                  ) : selectedRepo ? (
                     <button className="repo-switcher">
                       {selectedRepo.name} <ChevronDown size={14} />
                     </button>
@@ -950,7 +1042,7 @@ export default function Dashboard() {
             {activeNav === 'overview' && (
               <button
                 className={`scan-trigger-btn ${scanning ? 'scanning' : ''}`}
-                onClick={triggerScan}
+                onClick={() => void triggerScan()}
                 disabled={scanning || !selectedRepo}
               >
                 {scanning ? (
@@ -1134,7 +1226,7 @@ export default function Dashboard() {
                             onClick={() => setSelectedVuln(v)}
                             onDoubleClick={() => navigate(`/vulnerabilities/${v.id}`)}
                           >
-                            <td><code className="vuln-id" style={{cursor: 'pointer'}} onClick={() => navigate(`/vulnerabilities/${v.id}`)}>V-{String(v.id).padStart(3, '0')}</code></td>
+                            <td><code className="vuln-id" style={{cursor: 'pointer'}} onClick={() => navigate(`/vulnerabilities/${v.id}`)}>{formatVulnId(v.id)}</code></td>
                             <td><span className="vuln-file"><FileCode2 size={13} />{v.filePath}</span></td>
                             <td><span style={{cursor: 'pointer', fontWeight: 600, color: '#e0e7ff'}} onClick={() => navigate(`/vulnerabilities/${v.id}`)}>{v.title}</span></td>
                             <td><SeverityBadge s={v.severity} />
@@ -1353,25 +1445,25 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Scan Activity Section */}
+            {/* Scan Activity Section — findings found per day; "Now" is the current open total */}
             <section className="activity-section">
               <h2 className="section-title">Scan Activity</h2>
               <div className="activity-chart">
-                {[4, 8, 3, 12, 6, 9, 2, 7, 5, 11, 3, 8, stats.critical + stats.high].map((h, i) => (
+                {activityBars.map((b, i) => (
                   <div key={i} className="activity-col">
                     <div
                       className="activity-bar"
                       style={{
-                        height: `${Math.max(8, (h / 13) * 100)}%`,
+                        height: `${Math.max(8, (b.count / activityMax) * 100)}%`,
                         background: i === 12
                           ? 'var(--accent-blue)'
-                          : h > 8
+                          : b.count > 8
                             ? 'rgba(239,68,68,0.5)'
                             : 'rgba(255,255,255,0.1)',
                       }}
-                      title={`${h} issues`}
+                      title={`${b.count} issues`}
                     />
-                    <span className="activity-label">{['M', 'T', 'W', 'T', 'F', 'S', 'S', 'M', 'T', 'W', 'T', 'F', 'Now'][i]}</span>
+                    <span className="activity-label">{b.label}</span>
                   </div>
                 ))}
               </div>
@@ -1425,10 +1517,11 @@ export default function Dashboard() {
                   <div className="repo-card-actions">
                     <button 
                       className="repo-action-btn-small"
+                      disabled={scanning}
                       onClick={() => {
                         setSelectedRepo(r);
                         setActiveNav('overview');
-                        triggerScan();
+                        void triggerScan(r);
                       }}
                     >
                       <Play size={12} /> Scan Now
@@ -1478,7 +1571,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {scans.map(s => (
-                  <tr key={s.id}>
+                  <tr key={s.id} onClick={() => navigate(`/scans/${s.id}`)} style={{ cursor: 'pointer' }}>
                     <td><code>#S-{String(s.id).padStart(4, '0')}</code></td>
                     <td><span className="highlight">{s.repository.name}</span></td>
                     <td><span className="scan-commit-link">{s.branch}</span></td>
@@ -1495,8 +1588,16 @@ export default function Dashboard() {
                       {s.highCount > 0 && <span className="severity-pill-count severity-pill-count--high">{s.highCount} High</span>}
                       {s.mediumCount > 0 && <span className="severity-pill-count severity-pill-count--medium">{s.mediumCount} Med</span>}
                       {s.lowCount > 0 && <span className="severity-pill-count severity-pill-count--low">{s.lowCount} Low</span>}
-                      {s.criticalCount + s.highCount + s.mediumCount + s.lowCount === 0 && (
+                      {/* "Clean Scan" only for a scan that actually completed
+                          with zero findings — a FAILED scan also has all
+                          counts at 0 and used to be labelled Clean. */}
+                      {s.status === 'completed' && s.criticalCount + s.highCount + s.mediumCount + s.lowCount === 0 && (
                         <span className="status-badge status-badge--resolved">Clean Scan</span>
+                      )}
+                      {s.status === 'failed' && (
+                        <span className="status-badge" style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--accent-red)' }} title={s.errorMessage || 'Scan failed'}>
+                          Scan failed{s.errorMessage ? ` — ${s.errorMessage}` : ''}
+                        </span>
                       )}
                     </td>
                     <td>{s.totalFiles} files</td>
@@ -1508,6 +1609,9 @@ export default function Dashboard() {
             </table>
             </div>
             )}
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.75rem' }}>
+              Counts are as recorded when each scan finished. Findings fixed or marked afterwards show in the Vulnerability Database, not here.
+            </p>
           </div>
         )}
 
@@ -1515,7 +1619,7 @@ export default function Dashboard() {
         {activeNav === 'vulndb' && (
           <div className="scans-tab-container">
             <div className="tab-section-header">
-              <h2 className="tab-title">Vulnerability Master Database ({filteredVulns.length})</h2>
+              <h2 className="tab-title">Vulnerability Master Database ({vulnTotal} {filterStatus === 'ALL' ? 'total' : filterStatus.toLowerCase()})</h2>
               <div className="vuln-filters">
                 <Filter size={14} />
                 {SEVERITY_FILTER_OPTIONS.map(s => (
@@ -1528,6 +1632,26 @@ export default function Dashboard() {
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="vuln-filters" style={{ marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Status:</span>
+              {STATUS_FILTER_OPTIONS.map(s => (
+                <button
+                  key={s}
+                  className={`filter-btn ${filterStatus === s ? 'active' : ''}`}
+                  onClick={() => setFilterStatus(s)}
+                >
+                  {s === 'FALSE_POSITIVE' ? 'FALSE POSITIVE' : s}
+                </button>
+              ))}
+              <button
+                className={`filter-btn ${rankMode === 'ai' ? 'active' : ''}`}
+                onClick={() => void toggleRankMode()}
+                disabled={ranking}
+                title="Sort by AI priority instead of severity"
+              >
+                {ranking ? 'Ranking…' : rankMode === 'ai' ? 'AI priority ✓' : 'Sort: AI priority'}
+              </button>
             </div>
 
             <div className="table-scroll-x">
@@ -1544,9 +1668,12 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {filteredVulns.map(v => (
+                {/* Sorted (severity or AI priority) + paginated 25/page.
+                    The list API caps at 200 rows per fetch, so past 200
+                    open findings this needs server-side paging. */}
+                {displayedVulns.slice((vulnPage - 1) * VULN_PAGE_SIZE, vulnPage * VULN_PAGE_SIZE).map(v => (
                   <tr key={v.id}>
-                    <td><code>V-{String(v.id).padStart(4, '0')}</code></td>
+                    <td><code>{formatVulnId(v.id)}</code></td>
                     <td><span className="highlight">{v.title}</span></td>
                     <td><SeverityBadge s={v.severity} /></td>
                     <td><span className="repo-card-fullname">{v.filePath}</span></td>
@@ -1566,15 +1693,22 @@ export default function Dashboard() {
               </tbody>
             </table>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+              <button className="filter-btn" disabled={vulnPage <= 1} onClick={() => setVulnPage((p) => Math.max(1, p - 1))}>← Prev</button>
+              <span>Page {vulnPage} of {Math.max(1, Math.ceil(displayedVulns.length / VULN_PAGE_SIZE))} — {displayedVulns.length} shown</span>
+              <button className="filter-btn" disabled={vulnPage >= Math.ceil(displayedVulns.length / VULN_PAGE_SIZE)} onClick={() => setVulnPage((p) => p + 1)}>Next →</button>
+            </div>
           </div>
         )}
 
         {/* ── Tab: Analytics ── */}
         {activeNav === 'analytics' && (
           <>
-            <Suspense fallback={<PageSkeleton />}>
-              <ProductInsights accessToken={accessToken} />
-            </Suspense>
+            {(activeRole === 'OWNER' || activeRole === 'ADMIN') && (
+              <Suspense fallback={<PageSkeleton />}>
+                <ProductInsights accessToken={accessToken} />
+              </Suspense>
+            )}
             <div className="analytics-container">
               <h2 className="tab-title">Security Risk Intelligence Report</h2>
 
@@ -1661,18 +1795,44 @@ export default function Dashboard() {
 
             <div className="settings-card">
               <h3 className="settings-section-title">User Information</h3>
+              {nameError && <p style={{fontSize:'0.8rem', color:'#f87171', marginBottom:'0.5rem'}} role="alert">{nameError}</p>}
               <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', fontSize: '0.85rem'}}>
                 <div>
                   <span style={{color: 'var(--text-dim)', display: 'block', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '2px'}}>First Name</span>
-                  <span className="highlight">{user.firstName}</span>
+                  <input
+                    type="text"
+                    value={editFirstName}
+                    onChange={e => setEditFirstName(e.target.value)}
+                    style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem', width:'100%'}}
+                  />
                 </div>
                 <div>
                   <span style={{color: 'var(--text-dim)', display: 'block', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '2px'}}>Last Name</span>
-                  <span className="highlight">{user.lastName}</span>
+                  <input
+                    type="text"
+                    value={editLastName}
+                    onChange={e => setEditLastName(e.target.value)}
+                    style={{background:'var(--bg-card)', border:'1px solid var(--border-color)', padding:'0.6rem', color:'#fff', borderRadius:'6px', fontSize:'0.82rem', width:'100%'}}
+                  />
                 </div>
                 <div style={{gridColumn: 'span 2'}}>
                   <span style={{color: 'var(--text-dim)', display: 'block', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '2px'}}>Email Address</span>
                   <span className="highlight">{user.email}</span>
+                </div>
+                <div style={{gridColumn: 'span 2'}}>
+                  <button
+                    type="button"
+                    className="connect-repo-btn"
+                    disabled={savingName || !editFirstName.trim() || !editLastName.trim() || (editFirstName === user.firstName && editLastName === user.lastName)}
+                    onClick={() => void handleSaveName()}
+                  >
+                    {savingName ? 'Saving…' : 'Save name'}
+                  </button>
+                </div>
+                <div style={{gridColumn: 'span 2'}}>
+                  <button type="button" className="repo-action-btn-small" onClick={() => navigate('/onboarding?replay=1')}>
+                    Replay onboarding wizard →
+                  </button>
                 </div>
               </div>
             </div>
@@ -1946,7 +2106,7 @@ export default function Dashboard() {
                       <label style={{fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-dim)'}}>Platform</label>
                       <select
                         value={newRepoPlatform}
-                        onChange={e => { setNewRepoPlatform(e.target.value); setNewRepoName(''); setNewRepoFullName(''); setNewRepoUrl(''); }}
+                        onChange={e => { setNewRepoPlatform(e.target.value); }}
                         style={{background: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '0.6rem', color: '#fff', borderRadius: '6px'}}
                       >
                         <option value="github">GitHub</option>
@@ -2041,8 +2201,8 @@ export default function Dashboard() {
                 <button type="button" className="repo-action-btn-small" style={{flex: 'none'}} onClick={() => setIsConnectModalOpen(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="connect-repo-btn">
-                  Connect Repository
+                <button type="submit" className="connect-repo-btn" disabled={connectingRepo}>
+                  {connectingRepo ? 'Connecting…' : 'Connect Repository'}
                 </button>
               </div>
             </form>

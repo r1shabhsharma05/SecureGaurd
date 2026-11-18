@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Mail, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { apiUrl } from '../config/api';
@@ -39,6 +39,17 @@ export default function VerifyEmailPage() {
       setMessage(err instanceof Error ? err.message : 'Verification failed.');
     }
   };
+
+  // A user landing here from the email link expects verification to happen
+  // — the old page sat idle until they clicked "Verify my email".
+  const autoVerified = useRef(false);
+  useEffect(() => {
+    if (!autoVerified.current && token) {
+      autoVerified.current = true;
+      void verify();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const handleResend = async (e: React.FormEvent) => {
     e.preventDefault();

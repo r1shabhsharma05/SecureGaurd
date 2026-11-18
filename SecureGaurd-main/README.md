@@ -153,6 +153,23 @@ npm audit --omit=dev
 
 Run database integration and end-to-end scripts only with a disposable test database and test credentials. Never execute Terraform, Kubernetes, Docker, package installation, or repository scripts from scanned repositories.
 
+## E2E fix batch — 19 Nov 2026
+
+An end-to-end test run (report: `~/workspace/user/files/secureguard-e2e-report-2026-11-19.md`, kept out of the repo) found the app was not genuinely working end to end. The fixes in this batch, all local and unpushed until approved:
+
+- **No more phantom repos.** The dashboard auto-created a repo from the user's first name (`harsh/secureguard-main`, a GitHub 404) whenever the repo list was briefly empty. That effect is deleted. Connect now verifies reachability with `git ls-remote` before storing a URL, and connect failures always surface a toast instead of failing silently.
+- **Honest scan states.** A FAILED scan with 0 findings was labelled "Clean Scan"; it now shows "Scan failed" with the failure reason, stored on the scan row (`Scan.errorMessage`, migration `20261119_scan_error_vuln_indexes`). Scan rows are clickable and open a new `/scans/:id` detail page. Trigger Scan asks for confirmation, takes the repo explicitly (no more stale-selection scans), and the trigger/poll fetches time out so the button can never stick on "Scanning…".
+- **One definition of "how many findings".** Dashboard, Vuln DB, chart and compliance disagreed because each counted a different slice. Canonical: open findings, distinct by (rule, file, line). `GET /api/vulnerabilities` defaults to `status=open`, returns severity-ranked rows with `?page&limit` and `X-Total-Count`. Re-scans no longer insert duplicate rows (`utils/findingDedup.js`, used by the queued and webhook scan paths). The chart renders real per-day counts instead of hardcoded bars; per-scan counters are labelled "at scan time". Compliance counts `ignored` as resolved instead of dropping it from both sides.
+- **SBOM page** falls back to the org-wide list when the per-repo lookup 404s, and shows a real error instead of "No SBOM" when the server fails.
+- **AI fix honesty.** The detail page rendered the real engine from `GET /api/ai/status` (rule-based when no Gemini key is set) instead of a hardcoded "Gemini 1.5 Flash" label, and the fix engine's template score is shown separately labelled — never as the finding's CVSS.
+- **Billing honesty.** An expired subscription period no longer counts as a paid plan; the billing modal says "Billing not configured" when Razorpay keys/plans are missing (vars documented in `backend/.env.example`). The live Pro row from the old mock checkout still needs an owner decision (downgrade to Free or grandfather it).
+- **Analytics scope.** The product-activity panel is labelled site-wide (all accounts), restricted to OWNER/ADMIN, and probe/404 paths no longer top "most visited pages".
+- **Smaller fixes.** Finding IDs are one format (`V-0068`) everywhere; the Vuln DB has a status filter, AI-priority sort and 25/page pagination; the active tab survives refresh (`?tab=`); the header wraps at ~1034px instead of clipping buttons; `/verify-email` and `/oauth/callback` have correct page titles and the email link auto-verifies on landing; the CI/CD template uses the real webhook URL; Settings can edit the profile name (`PATCH /api/auth/me`) and replay onboarding (`/onboarding?replay=1`).
+
+Regression tests: `backend/tests/e2eFixes.test.js` (8 tests — dedup, compliance ignored bucket, billing expiry, analytics topPaths filter, vuln-list definition). Full suite: 98/100 pass; the 2 failures are the pre-existing live-Postgres/secrets ones (`compliance`, `deployment_config`).
+
+Still owner-only (not code): delete/disconnect the `harsh/secureguard-main` repo row in production and connect the real repo; Render logs for the connect 500; Razorpay keys + plans; Brevo verified sending domain; Google/GitHub OAuth client IDs; whether user-facing API keys are in scope; a backfill dedupe of the existing 112 finding rows.
+
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.

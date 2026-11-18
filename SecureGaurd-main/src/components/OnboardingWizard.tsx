@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   ShieldCheck,
   Check,
@@ -51,13 +51,16 @@ export const OnboardingWizard: React.FC = () => {
   const { user, accessToken, refreshSession, completeOnboarding } = useAuth();
   const { activeOrg, inviteMember } = useOrganization();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  // Redirect existing onboarded users away
+  // Redirect existing onboarded users away — unless they asked to replay
+  // the wizard from Settings (?replay=1).
+  const isReplay = new URLSearchParams(location.search).get('replay') === '1';
   useEffect(() => {
-    if (user?.onboardingCompleted) {
+    if (user?.onboardingCompleted && !isReplay) {
       navigate('/dashboard');
     }
-  }, [user, navigate]);
+  }, [user, navigate, isReplay]);
 
   const storageKey = user ? `${STORAGE_KEY_PREFIX}${user.id}` : null;
 

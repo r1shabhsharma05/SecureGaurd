@@ -90,7 +90,13 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
         ? `/api/sboms/repository/${selectedRepoId}`
         : '/api/sboms';
 
-      const res = await orgFetch(url);
+      let res = await orgFetch(url);
+      // The per-repo lookup 404s when the SBOM rows point at a different
+      // repo id than the one the UI shows (or RLS hides them) — fall back
+      // to the org-wide list instead of silently showing "none".
+      if (!res.ok && selectedRepoId) {
+        res = await orgFetch('/api/sboms');
+      }
       if (res.ok) {
         const data = await res.json();
         const list = Array.isArray(data) ? data : [data];
@@ -102,8 +108,11 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
           setSelectedSbom(null);
         }
       } else {
+        // A real failure is not "no SBOMs" — say so instead of rendering
+        // the empty state for an error.
         setSboms([]);
         setSelectedSbom(null);
+        setError(`Could not load SBOMs (server answered ${res.status}).`);
       }
     } catch (err: unknown) {
       console.error('Failed to load SBOMs:', err);
@@ -212,12 +221,26 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
     );
   }
 
+  if (error) {
+    return (
+      <EmptyState
+        icon={<ShieldAlert size={48} />}
+        title="Could not load SBOMs"
+        body={error}
+        actionLabel="Retry"
+        onAction={() => void fetchSboms()}
+      />
+    );
+  }
+
   if (sboms.length === 0) {
     return (
       <EmptyState
         icon={<Layers size={48} />}
         title="No SBOM Available Yet"
         body="Run a security scan on your repository to automatically generate an industry-standard SPDX 2.3 Software Bill of Materials."
+        actionLabel="Go to Overview to run a scan"
+        onAction={() => navigate('/dashboard?tab=overview')}
       />
     );
   }

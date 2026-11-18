@@ -20,3 +20,13 @@ export const SCAN_TYPE_FILTER_OPTIONS = [
   'KUBERNETES',
   'DOCKER',
 ] as const;
+
+// Finding lifecycle status. 'ALL' means every status (the list API
+// defaults to open only when no ?status= is passed).
+export const STATUS_FILTER_OPTIONS = [
+  'ALL',
+  'OPEN',
+  'FIXED',
+  'IGNORED',
+  'FALSE_POSITIVE',
+] as const;

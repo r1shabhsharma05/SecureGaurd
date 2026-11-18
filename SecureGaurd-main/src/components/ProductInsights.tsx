@@ -90,9 +90,9 @@ export default function ProductInsights({ accessToken }: { accessToken: string |
   const allZero = totals && Object.values(totals).every((v) => v === 0);
 
   return (
-    <section className="insights-section" aria-label="Product activity">
+    <section className="insights-section" aria-label="Site-wide product activity">
       <div className="insights-header">
-        <h3 className="analytics-card-title">Product activity</h3>
+        <h3 className="analytics-card-title">Site-wide product activity (all accounts)</h3>
         <label className="insights-range">
           <span>Range</span>
           <select value={range} onChange={(e) => setRange(e.target.value as Range)} aria-label="Activity range">
@@ -163,8 +163,9 @@ export default function ProductInsights({ accessToken }: { accessToken: string |
             </div>
           </div>
           <p className="insights-note">
-            Aggregate counts across all accounts for the selected range. Page views are recorded only for
-            visitors who granted analytics consent.
+            Site-wide product counts across all accounts for the selected range — not your organization's
+            security data. Your org's findings are in the Security Risk Intelligence Report below.
+            Page views are recorded only for visitors who granted analytics consent.
           </p>
         </>
       )}

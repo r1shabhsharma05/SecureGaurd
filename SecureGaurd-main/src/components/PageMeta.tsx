@@ -75,6 +75,16 @@ const ROUTE_META: Record<string, RouteMeta> = {
     description: 'Choose a new password for your SecureGuard account.',
     indexable: false,
   },
+  '/verify-email': {
+    title: 'Verify your email · SecureGuard',
+    description: 'Confirm your email address to activate your SecureGuard account.',
+    indexable: false,
+  },
+  '/oauth/callback': {
+    title: 'Signing you in · SecureGuard',
+    description: 'Completing your SecureGuard sign-in.',
+    indexable: false,
+  },
 };
 
 const NOT_FOUND_META: RouteMeta = {
@@ -140,6 +150,18 @@ export default function PageMeta() {
           { label: 'Home', path: '/' },
           { label: 'Dashboard', path: '/dashboard' },
           { label: `Vulnerability ${id}`, path: pathname },
+        ],
+      };
+    } else if (pathname.startsWith('/scans/')) {
+      const id = params.id ?? pathname.split('/').pop();
+      meta = {
+        title: `Scan ${id} · SecureGuard`,
+        description: 'Scan detail: repository, status, findings recorded at scan time and failure reason.',
+        indexable: false,
+        crumbs: [
+          { label: 'Home', path: '/' },
+          { label: 'Dashboard', path: '/dashboard' },
+          { label: `Scan ${id}`, path: pathname },
         ],
       };
     } else {

@@ -344,6 +344,16 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                 <Skeleton height="6rem" label="Loading subscription and usage data" />
               ) : billingData ? (
                 <div className="billing-tab-container">
+                  {/* Billing is not configured until Razorpay keys + plans
+                      are set (see backend/.env.example): prices are null,
+                      checkout 503s, and no paid plan can activate. Say so
+                      plainly instead of the silent "Set in Razorpay". */}
+                  {(!billingData.planPrices?.PRO && !billingData.planPrices?.ENTERPRISE) && (
+                    <div className="billing-role-restriction" role="status" style={{ marginBottom: '1rem' }}>
+                      <AlertCircle size={15} />
+                      <span>Billing is not configured — Razorpay keys and plan IDs are missing, so paid upgrades are unavailable. Contact the workspace owner.</span>
+                    </div>
+                  )}
                   {/* Current Subscription Card */}
                   <div className="billing-status-card">
                     <div className="billing-status-main">
@@ -463,7 +473,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                       <div className="featured-badge">MOST POPULAR</div>
                       <div className="plan-card-header">
                         <h3>Pro</h3>
-                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.PRO) || 'Set in Razorpay'} <span>/ month</span></div>
+                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.PRO) || 'Not configured'} <span>/ month</span></div>
                       </div>
                       <ul className="plan-features-list">
                         <li><Check size={14} /> 25 Code Repositories</li>
@@ -490,7 +500,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     <div className={`plan-card ${billingData.plan === 'ENTERPRISE' ? 'plan-card-active' : ''}`}>
                       <div className="plan-card-header">
                         <h3>Enterprise</h3>
-                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.ENTERPRISE) || 'Set in Razorpay'} <span>/ month</span></div>
+                        <div className="plan-price">{formatPlanPrice(billingData.planPrices?.ENTERPRISE) || 'Not configured'} <span>/ month</span></div>
                       </div>
                       <ul className="plan-features-list">
                         <li><Check size={14} /> Unlimited Repositories</li>

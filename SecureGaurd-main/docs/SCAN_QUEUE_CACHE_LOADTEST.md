@@ -121,6 +121,49 @@ delta; in production a HIT skips a Postgres round-trip.
 > to 716 ms (8.6×) with zero failed scans and a measured 95% cache hit
 > rate on vulnerability lists.
 
+## Reproducing the numbers (your own machine)
+
+The harness does not ship its fixture — generate it first, one command:
+
+```bash
+cd SecureGaurd-main
+SCAN_LOCAL_BASE=/path/to/scan-fixtures \
+  node backend/tests/generateScanFixture.js
+# writes 152 files to /path/to/scan-fixtures/small-repo:
+# 15 findings per scan (12 critical, 3 high, 6 secrets). The planted
+# secrets are dummy values (Amazon's published example key, a placeholder
+# password) — never replace them with real credentials.
+```
+
+Then, from `SecureGaurd-main` (backend deps installed, `npm install` in
+`backend/`):
+
+```bash
+# After-mode needs a LOCAL Redis on :6390 (docker-compose up redis, or
+# redis-server --port 6390). The harness FLUSHES that Redis, so never
+# point REDIS_URL at a shared/production instance.
+export SCAN_LOCAL_BASE=/path/to/scan-fixtures
+export HARNESS_OUT=/path/to/scan-perf-after-concurrent100.json
+node backend/tests/scanPerfHarness.js after concurrent100
+node backend/tests/scanPerfHarness.js after cache
+node backend/tests/scanPerfHarness.js after single
+```
+
+Three gotchas:
+
+1. **Fixture first.** Without `small-repo` under `SCAN_LOCAL_BASE` the
+   harness scans nothing and the numbers are meaningless.
+2. **`HARNESS_OUT` must be set on your machine.** The default path is
+   this VM's workspace (`/home/hatch/workspace/...`) and is invalid
+   anywhere else.
+3. **Before-numbers need the old code.** The harness does not simulate
+   "before" — check out the parent commit of `84212d9`, run the same
+   three commands with `before` instead of `after` (no Redis needed),
+   then come back to `84212d9`. Compare only runs on the same machine
+   with the same fixture; absolute ms will differ, the ratio is the
+   signal. Live production numbers come from `GET /api/scans/queue/stats`
+   and the `X-Cache: HIT` header on `GET /api/vulnerabilities`.
+
 ## Known limitations
 
 - A crashed process leaves `queued`/`running` rows behind — no

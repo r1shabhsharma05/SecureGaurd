@@ -16,6 +16,7 @@ import OAuthCallbackPage from './components/OAuthCallbackPage'
 import Dashboard from './components/Dashboard'
 import OnboardingWizard from './components/OnboardingWizard'
 import VulnerabilityDetailsPage from './components/VulnerabilityDetailsPage'
+import ScanDetailPage from './components/ScanDetailPage'
 import { AcceptInvitePage } from './components/AcceptInvitePage'
 import { ResetPasswordPage } from './components/ResetPasswordPage'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -139,6 +140,7 @@ function App() {
                 <Route path="/verify-email" element={<VerifyEmailPage />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/vulnerabilities/:id" element={<VulnerabilityDetailsPage />} />
+                <Route path="/scans/:id" element={<ScanDetailPage />} />
                 <Route path="/accept-invite" element={<InviteRouteHandler />} />
                 <Route path="/reset-password" element={<ResetPasswordRouteHandler />} />
                 <Route path="*" element={<NotFound />} />
