@@ -60,6 +60,11 @@ outstanding). SEC-13 moved BLOCKED → PARTIAL (measured: 15 findings,
 done (commits `a72de3d` / `1d7aa1f` / `f13a2ce`), SEC-33 purge script
 landed — but no item crossed to PASS: all 4 FAILs still need owner
 actions (see `docs/SECURITY_GATE_REPORT.md`).
+**Day 6 (2026-11-19):** counts STILL UNCHANGED — no item crossed to
+PASS. Within-item progress: SEC-18 coverage 3 → 9/48 routes, SEC-17
+limiter-trip proven in-process, SEC-19/SEC-21 live re-verified. The 4
+FAILs are owner actions; Rishabh confirmed all 9 done 2026-11-19
+~01:00 IST — gate re-verification is Day 7, not this run.
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -591,6 +596,12 @@ below).
   **Gate pass (2026-11-18):** Render API is unreachable from this VM
   (401, no token/service ID on the VM) — no logs, no live 429 proof.
   Stays PARTIAL as a probe limitation, not a limiter failure.
+  **Day 6 (2026-11-19):** limiter is mounted and counting — new
+  `backend/tests/authValidation.test.js` spends the process's shared
+  `authLimiter` budget (10/15 min): 11 rapid logins answer 400, 400,
+  then 429 × 9. Live 429 proof still outstanding (same rotating-IP
+  confound; the 35-request live probe was NOT repeated — it would return
+  the same inconclusive result). Needs a stable IP or Render logs.
 - **Remaining risk:** low, but the two gaps are real and cheap to close.
   Gaps closed in code; live trigger proof outstanding.
 - **Reviewer notes:** fix Day 6.
@@ -631,10 +642,16 @@ below).
   No route is unvalidated; the gap is consistency, not absence. Wiring
   all 45 is Day 8+ refactor work, not a silent gate-pass change.
 - **Remaining risk:** medium. Validation is ad-hoc per route; a missed
-  check on a new route is a live bug. Standardise on Day 6. The shared
-  library now exists and is wired into the highest-risk routes (contact,
-  scan trigger, auth change-password); remaining POST/PATCH routes still
-  use per-route checks — apply `validateBody` to them as follow-up.
+  check on a new route is a live bug. The auth surface (the
+  unauthenticated routes) is now standardised (Day 6, 9/48); the
+  remaining 39 authenticated mutating routes still use per-route checks
+  — apply `validateBody` to them as follow-up (Day 8+).
+  **Day 6 (2026-11-19):** the auth unit is done — 6 routes wired
+  (register, login, resend-verification, forgot-password, reset-password,
+  delete-account), 11/11 new tests + 49/49 regression set; coverage
+  3 → **9 of 48** mutating routes. Deliberately not wired: verify-email
+  (query-or-body token), OAuth callback (redirect flow), no-body routes.
+  See `docs/BACKEND_SECURITY.md`.
 - **Reviewer notes:** do not confuse the scanner's `sanitizerPatterns.json`
   (AST feature detection) with input sanitization — different thing.
 
@@ -664,6 +681,11 @@ below).
   base-uri 'none'`. Both hosts serve CSP.
 - **Remaining risk:** low. CSP is live; keep the sha256 hash in sync if
   the JSON-LD inline script ever changes.
+  **Day 6 (2026-11-19) live re-verify:** frontend 200 — CSP present
+  with the same sha256 hash as `vercel.json`, plus nosniff, DENY,
+  Referrer-Policy, Permissions-Policy, COOP, HSTS; backend `/health`
+  200 — `default-src 'none';frame-ancestors 'none';base-uri 'none'` +
+  nosniff. See `docs/BACKEND_SECURITY.md`.
 - **Reviewer notes:** fix Day 6 (add CSP), verify live on Day 19.
   — DONE by the fix-all run, 2026-11-16.
 
@@ -677,6 +699,8 @@ below).
   (SEC-19).
 - **Test evidence:** grep this run (0 hits). No XSS test suite exists
   (Day 18 item).
+  **Day 6 (2026-11-19):** re-grep `dangerouslySetInnerHTML` in `src/` —
+  still **0 hits**.
 - **Remaining risk:** low. CSP is now live (SEC-19, fix-all run) — the
   second layer exists.
 - **Reviewer notes:** none.
@@ -696,6 +720,11 @@ below).
 - **Test evidence:** code inspection; live CORS probe NOT run (Day 6
   procedure: preflight from an unlisted origin, expect no
   `Access-Control-Allow-Origin`).
+  **Day 6 (2026-11-19) live probe:** preflight from unlisted origin
+  `https://evil.example.com` → 200 with NO `Access-Control-Allow-Origin`
+  (denied, no 500); same preflight from
+  `https://secureguard-main.vercel.app` → 204 with the origin +
+  `Access-Control-Allow-Credentials: true`. Procedure done, PASS stands.
 - **Remaining risk:** low.
 - **Reviewer notes:** none.
 
@@ -705,6 +734,15 @@ below).
   remaining routes still ad-hoc.
   **Gate pass (2026-11-18):** measured — 45 of 48 mutating routes lack
   the shared validator (see SEC-18). Same verdict, exact count now.
+  **Day 6 (2026-11-19):** 6 auth routes wired to the shared library
+  (register, login, resend-verification, forgot-password, reset-password,
+  delete-account — `backend/tests/authValidation.test.js` 11/11, plus
+  49/49 in the regression set). Coverage is now **9 of 48** mutating
+  routes. Deliberately NOT wired: verify-email (token from query OR
+  body), OAuth callback (browser redirect flow — a 400 would break it),
+  refresh/logout/complete-onboarding (no body). 39 routes remain ad-hoc
+  — Day 8+ refactor, not a silent change. See
+  `docs/BACKEND_SECURITY.md`.
 - **Sources:** screenshot 03 ("sanitize forms" overlaps screenshot 06
   "form validation" — the frontend half is SEC-34).
 - **Reviewer notes:** kept as a pointer so the screenshot-03 item is not
@@ -723,6 +761,9 @@ below).
 - **Remaining risk:** none — but if file upload is ever added, it must ship
   with type allow-listing, size caps, virus scanning and private storage
   from day one.
+  **Day 6 (2026-11-19):** re-grep upload handlers (multer,
+  upload.single/array, express-fileupload, busboy) in `backend/` +
+  `src/` — still **0 hits**.
 - **Reviewer notes:** revisit if Day 12+ adds uploads.
 
 ### SEC-24 — Private storage buckets
@@ -770,6 +811,8 @@ below).
   **Day 4 (2026-11-17):** live probe `GET /api/_test-error` → **404** —
   the test route is not enabled in production. Caveat resolved; the
   dashboard confirm is now a belt-and-braces check only.
+  **Day 6 (2026-11-19):** re-probed `GET /api/_test-error` → **404**
+  again — still not enabled in production.
 - **Remaining risk:** low, conditional on that Day 4 check.
 - **Reviewer notes:** none.
 
@@ -786,6 +829,9 @@ below).
   placeholder credentials.
 - **Test evidence:** code inspection + Day 1. Live webhook tests NOT run
   (would need a real repo webhook delivery — Day 12/18 procedure).
+  **Day 6 (2026-11-19):** code unchanged by this run; re-read confirms
+  the HMAC/idempotency wiring above. Live test still needs a real
+  delivery (Day 12/18).
 - **Remaining risk:** low. Known race: Razorpay idempotency check sits
   outside the transaction (SEC-31).
 - **Reviewer notes:** none.
@@ -806,6 +852,12 @@ below).
   pinning). No live SSRF test run (Day 6 procedure, against a staging
   stack — never point a live SSRF probe at internal metadata endpoints
   from production).
+  **Day 6 (2026-11-19):** `ssrfGuard.js` re-read — single resolution per
+  hop, every address must be public, pinned-IP dialing with
+  `remoteAddress` verified pre-request, redirect re-validation (max 3),
+  2 MB cap, 10 s timeout, credentials rejected. No live test run (same
+  staging-only rule — production is not the place to probe metadata
+  endpoints). See `docs/BACKEND_SECURITY.md`.
 - **Remaining risk:** low. The clone path notes its own TOCTOU residual,
   bounded by the host allowlist.
 - **Reviewer notes:** none.
@@ -1328,13 +1380,18 @@ below).
    (`normalizeEmail`/`findUserByEmail`, 4 new tests, 31/31 offline
    pass); `docs/AUTH_AND_AUTHORIZATION.md` written. Live cross-tenant
    matrix still BLOCKED (mailbox); SEC-07/15/16 stay PARTIAL.
-3. Day 6: CSP header (SEC-19) — **DONE, live-verified**; rate-limit
-   `/refresh` + `/me` (SEC-17) — **DONE in code; live 429 proof open**;
+3. Day 6: CSP header (SEC-19) — **DONE, live re-verified 2026-11-19**;
+   rate-limit `/refresh` + `/me` (SEC-17) — **DONE in code; limiter
+   trips at 10 in-process (new test), live 429 proof still open**;
    Razorpay idempotency inside the transaction (threat T10) — **DONE**;
    classifier key on the webhook path (threat T11) — **DONE**;
-   standardised input validation (SEC-18) — **DONE (lib + 3 routes;
-   remaining routes follow-up)**; live CORS/rate-limit/header probes —
-   **header probes DONE; rate-limit probe inconclusive**.
+   standardised input validation (SEC-18) — **auth routes wired 2026-11-19
+   (9/48 routes; 39 remain, Day 8+)**; live CORS probe — **DONE
+   2026-11-19 (unlisted origin denied, allowed origin 204)**; SSRF +
+   webhook code re-read — **PASS stands, live tests need staging/real
+   delivery**. **Day 6 run (2026-11-19):** 6 auth routes wired to the
+   shared zod library, 11/11 new tests + 49/49 regression set,
+   `docs/BACKEND_SECURITY.md` written. SEC-17/18/22 stay PARTIAL.
 4. Day 7: backup taken + restore-tested (SEC-32) — **still FAIL**;
    Postgres RLS (SEC-31) — **migration written, not applied; call-site
    conversion + app-role check first**; live cross-tenant matrix

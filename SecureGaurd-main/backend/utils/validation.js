@@ -4,9 +4,11 @@
 // route validated ad-hoc (or not at all); a missed check on a new route was
 // a live bug. Standardise on zod here: schemas are the single source of
 // truth, and validateBody / validateQuery enforce them at the trust
-// boundary. Unit A (auth.js) can import the same exports — zEmail,
-// zPassword, zIntId, zString are deliberately auth-shaped too.
-// Pure zod: no DB, no network, no secrets.
+// boundary. The auth routes are wired to the same exports (register,
+// login, email-only, reset-password, delete-account schemas below).
+// Pure zod: no DB, no network, no secrets. Day 6 wired the auth routes
+// (register, login, resend-verification, forgot/reset-password, delete
+// account) to the same exports — see the route schemas below.
 const { z } = require('zod');
 
 // Common field schemas -------------------------------------------------------
@@ -75,6 +77,55 @@ const scanTriggerSchema = z.object({
   repositoryId: zIntId,
 });
 
+// Auth (Day 6, SEC-18 / SEC-22): the shared library now covers the auth
+// routes too. Each schema mirrors the inline check it replaces — same
+// 400, same boundary — so wiring it in changes no accepted input, only
+// where the rejection happens (at the trust boundary, before any DB or
+// mail call). verify-email is deliberately NOT here: its token comes
+// from the query string OR the body, and the handler's presence check
+// already covers both.
+
+// Register (POST /api/auth/register). firstName/lastName are trimmed
+// non-empty strings with no upper cap — the old code had none, and a cap
+// would newly reject long names. Password takes the 8–128 floor.
+const registerSchema = z.object({
+  firstName: z.string().trim().min(1, 'First name is required.'),
+  lastName: z.string().trim().min(1, 'Last name is required.'),
+  email: zEmail,
+  password: zPassword,
+});
+
+// Login (POST /api/auth/login). Password is a non-empty string, NOT
+// zPassword: the old code only required presence, and a length floor here
+// would answer a short password with a different message than "Invalid
+// credentials" — same 400, but a behaviour change for no gain.
+const loginSchema = z.object({
+  email: zEmail,
+  password: z.string().min(1, 'Password is required.'),
+});
+
+// Single-email routes (POST /api/auth/resend-verification,
+// POST /api/auth/forgot-password). Handlers keep their anti-enumeration
+// behaviour; this only proves the shape.
+const emailOnlySchema = z.object({
+  email: zEmail,
+});
+
+// Reset password (POST /api/auth/reset-password). Token is an opaque
+// non-empty string; newPassword takes the same 8–128 floor as register
+// and change-password.
+const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'Reset token is required.'),
+  newPassword: zPassword,
+});
+
+// Delete account (DELETE /api/auth/account). Confirmation must be the
+// literal string DELETE — a mistyped confirmation is a 400, as before.
+const deleteAccountSchema = z.object({
+  password: z.string().min(1, 'Current password is required.'),
+  confirmation: z.literal('DELETE'),
+});
+
 // Middleware -----------------------------------------------------------------
 
 // Formats zod issues into the API's existing { message } error shape, plus
@@ -136,6 +187,11 @@ module.exports = {
   zPagination,
   contactSchema,
   scanTriggerSchema,
+  registerSchema,
+  loginSchema,
+  emailOnlySchema,
+  resetPasswordSchema,
+  deleteAccountSchema,
   validateBody,
   validateQuery,
 };

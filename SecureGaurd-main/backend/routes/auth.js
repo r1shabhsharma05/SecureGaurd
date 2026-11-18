@@ -7,7 +7,7 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
-const { z, zPassword, validateBody } = require('../utils/validation');
+const { z, zPassword, validateBody, registerSchema, loginSchema, emailOnlySchema, resetPasswordSchema, deleteAccountSchema } = require('../utils/validation');
 const { planAccountDeletion } = require('../utils/accountDeletion');
 const { cancelOrgProviderSubscription } = require('./organizations');
 // SEC-31: the account-deletion path touches RLS tables only (memberships,
@@ -166,14 +166,11 @@ function clearRefreshCookie(res) {
 
 // ── POST /api/auth/register ───────────────────────────────────────────────────
 // Day 9: Turnstile captcha guard (env-gated — see utils/turnstile.js).
-router.post('/register', authLimiter, requireTurnstile(), async (req, res) => {
+// Day 6: validateBody(registerSchema) enforces the shape at the trust
+// boundary (all fields present, valid email, password 8–128) — the inline
+// presence/length guards it replaces are removed, not duplicated.
+router.post('/register', authLimiter, requireTurnstile(), validateBody(registerSchema), async (req, res) => {
   const { firstName, lastName, email, password } = req.body;
-
-  if (!firstName || !lastName || !email || !password)
-    return res.status(400).json({ message: 'All fields are required' });
-
-  if (password.length < 8)
-    return res.status(400).json({ message: 'Password must be at least 8 characters' });
 
   // Day 5 — store the canonical address; see normalizeEmail above.
   const cleanEmail = normalizeEmail(email);
@@ -267,9 +264,10 @@ router.post('/verify-email', verifyEmailHandler);
 // Anti-enumeration: unknown emails and already-verified accounts get the
 // same generic 200 as a real resend. Mail-unconfigured is an honest 503,
 // same precedent as forgot-password.
-router.post('/resend-verification', verifyLimiter, async (req, res) => {
+// Day 6: validateBody(emailOnlySchema) replaces the inline presence
+// check; the anti-enumeration 200 below is unchanged.
+router.post('/resend-verification', verifyLimiter, validateBody(emailOnlySchema), async (req, res) => {
   const { email } = req.body || {};
-  if (!email) return res.status(400).json({ message: 'Email is required' });
 
   try {
     const user = await findUserByEmail(email);
@@ -303,9 +301,11 @@ router.post('/resend-verification', verifyLimiter, async (req, res) => {
 });
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
-router.post('/login', authLimiter, async (req, res) => {
+// Day 6: validateBody(loginSchema) replaces the inline presence check.
+// The password is a non-empty string here, not zPassword — a short
+// password must still answer "Invalid credentials", not a length error.
+router.post('/login', authLimiter, validateBody(loginSchema), async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ message: 'All fields are required' });
 
   try {
     const user = await findUserByEmail(email);
@@ -463,9 +463,9 @@ router.post('/logout', async (req, res) => {
 
 // ── POST /api/auth/forgot-password ───────────────────────────────────────────
 // Day 9: Turnstile captcha guard (env-gated — see utils/turnstile.js).
-router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, res) => {
+// Day 6: validateBody(emailOnlySchema) replaces the inline presence check.
+router.post('/forgot-password', resetLimiter, requireTurnstile(), validateBody(emailOnlySchema), async (req, res) => {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email is required' });
 
   try {
     const user = await findUserByEmail(email);
@@ -517,10 +517,10 @@ router.post('/forgot-password', resetLimiter, requireTurnstile(), async (req, re
 // ── POST /api/auth/reset-password ────────────────────────────────────────────
 // Day 9: rate-limited like forgot-password — the token endpoint had no
 // limiter, so a stolen token could be brute-forced without friction.
-router.post('/reset-password', resetLimiter, async (req, res) => {
+// Day 6: validateBody(resetPasswordSchema) replaces the inline
+// presence/length checks (token required, new password 8–128).
+router.post('/reset-password', resetLimiter, validateBody(resetPasswordSchema), async (req, res) => {
   const { token, newPassword } = req.body;
-  if (!token || !newPassword) return res.status(400).json({ message: 'Token and new password are required' });
-  if (newPassword.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
 
   try {
     const user = await prisma.user.findFirst({
@@ -809,11 +809,11 @@ router.post('/complete-onboarding', authMiddleware, async (req, res) => {
 // Prisma (repos, scans, compliance reports, memberships); invitations
 // the user sent keep their rows with a null inviter; audit rows keep
 // theirs with a null actor.
-router.delete('/account', accountDeleteLimiter, authMiddleware, async (req, res) => {
-  const { password, confirmation } = req.body || {};
-  if (!password || confirmation !== 'DELETE') {
-    return res.status(400).json({ message: 'Your current password and the typed confirmation DELETE are required.' });
-  }
+router.delete('/account', accountDeleteLimiter, authMiddleware, validateBody(deleteAccountSchema), async (req, res) => {
+  // Day 6: validateBody(deleteAccountSchema) already proved the password
+  // is present and confirmation is the literal 'DELETE'.
+  const { password } = req.body || {};
+
   try {
     // User row itself has no RLS, but the included memberships do: run
     // under user-only context so the caller's OWN memberships are visible.
