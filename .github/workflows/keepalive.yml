@@ -1,0 +1,20 @@
+name: keepalive
+
+# The backend runs on Render's free tier, which spins the service down
+# after ~15 minutes idle — the next visitor then waits ~20 s for a cold
+# start on every page. Ping /health every 10 minutes during waking
+# hours (01:00-20:50 UTC = 06:30-02:20 IST) so the service stays warm
+# when people actually use it, without burning the free instance-hour
+# budget overnight.
+
+on:
+  schedule:
+    - cron: '*/10 1-20 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health
+        run: curl -fsS -m 90 https://securegaurd.onrender.com/health
