@@ -163,8 +163,11 @@ router.patch('/false-positive/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
 // A configured key is not enough: when Google retired
 // gemini-1.5-flash the API started returning 404, generation silently
 // fell back to the rule engine, and this endpoint kept claiming
-// Gemini — the UI label lied. Probe the model endpoint (cached 5 min)
-// so the reported engine follows reality.
+// Gemini — the UI label lied. The probe must exercise generation
+// itself: GET /models/{id} answers 200 for any valid key (catalog
+// lookup) even when :generateContent 404s for that key's project
+// (observed live 19 Nov 2026). Probe with a 1-token generation,
+// cached 5 min, so the reported engine follows reality.
 let geminiProbeCache = { at: 0, ok: false };
 async function geminiAvailable() {
   if (!process.env.GEMINI_API_KEY) return false;
@@ -172,11 +175,19 @@ async function geminiAvailable() {
   let ok = false;
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`, {
-      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
-      signal: controller.signal,
-    });
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'ping' }] }],
+          generationConfig: { maxOutputTokens: 1, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+        signal: controller.signal,
+      }
+    );
     clearTimeout(timeoutId);
     ok = res.ok;
   } catch { ok = false; }

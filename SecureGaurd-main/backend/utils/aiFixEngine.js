@@ -10,8 +10,10 @@
 // The Gemini model for fix generation. Configurable because Google
 // retires models: gemini-1.5-flash started returning 404 in prod
 // (19 Nov 2026), which silently fell back to the rule engine while
-// the UI still claimed Gemini. GEMINI_MODEL overrides without a push.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// the UI still claimed Gemini; gemini-2.5-flash is likewise closed
+// to new API keys (Google's 404 names gemini-3.8-flash as the
+// replacement). GEMINI_MODEL overrides without a push.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 // ── Rule-Based Fix Templates ──────────────────────────────────────────────────
 const FIX_RULES = {
@@ -398,7 +400,7 @@ Respond in valid JSON only (no markdown):
 }`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
   let response;
   try {
     response = await fetch(
@@ -410,7 +412,10 @@ Respond in valid JSON only (no markdown):
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+          // thinkingBudget 0: current Flash models think by default and
+          // blow past the request timeout on this structured-JSON task
+          // (prod 19 Nov 2026: "This operation was aborted" at 30 s).
+          generationConfig: { temperature: 0.1, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } }
         }),
         signal: controller.signal
       }
@@ -419,10 +424,19 @@ Respond in valid JSON only (no markdown):
     clearTimeout(timeoutId);
   }
 
-  if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+  if (!response.ok) {
+    // Keep Google's own error body in the log line — the bare status
+    // code (e.g. 404) does not say whether the model is retired or the
+    // key's project lacks access. Truncated; the body never echoes the key.
+    const detail = (await response.text().catch(() => '')).slice(0, 300);
+    throw new Error(`Gemini API error: ${response.status} ${detail}`.trim());
+  }
 
   const geminiData = await response.json();
-  const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  // Join every text part, skipping thought parts — thinking models may
+  // put a thought part first, so parts[0].text is not reliable.
+  const parts = geminiData.candidates?.[0]?.content?.parts || [];
+  const text = parts.filter((p) => !p.thought && p.text).map((p) => p.text).join('');
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('Could not parse Gemini response');
 

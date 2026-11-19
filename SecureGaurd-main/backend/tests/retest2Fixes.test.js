@@ -146,9 +146,17 @@ test('keepalive workflow pings the backend health endpoint', () => {
 
 test('Gemini model comes from GEMINI_MODEL, defaulting to a current model', () => {
   const src = readSrc('backend/utils/aiFixEngine.js');
-  assert.match(src, /process\.env\.GEMINI_MODEL \|\| 'gemini-2\.5-flash'/);
+  assert.match(src, /process\.env\.GEMINI_MODEL \|\| 'gemini-3\.8-flash'/);
   assert.doesNotMatch(src, /models\/gemini-1\.5-flash:generateContent/);
   assert.doesNotMatch(src, /engine: 'gemini-1\.5-flash/);
+});
+
+test('Gemini generation disables thinking and joins all text parts', () => {
+  // Thinking models blew the 30 s abort in prod ("This operation was
+  // aborted", 19 Nov 2026) and may put a thought part before the text.
+  const src = readSrc('backend/utils/aiFixEngine.js');
+  assert.match(src, /thinkingConfig: \{ thinkingBudget: 0 \}/);
+  assert.match(src, /parts\.filter\(\(p\) => !p\.thought && p\.text\)/);
 });
 
 test('AI status probes Gemini instead of trusting key presence', () => {
@@ -156,6 +164,20 @@ test('AI status probes Gemini instead of trusting key presence', () => {
   assert.match(src, /geminiAvailable\(\)/);
   assert.match(src, /v1beta\/models\/\$\{GEMINI_MODEL\}/);
   assert.doesNotMatch(src, /engine: process\.env\.GEMINI_API_KEY \? 'gemini-1\.5-flash'/);
+});
+
+test('AI status probe exercises generation, not just the model catalog', () => {
+  // GET /models/{id} answers 200 for any valid key even when
+  // :generateContent 404s for that key's project (live, 19 Nov 2026) —
+  // the probe must generate to be honest.
+  const src = readSrc('backend/routes/ai.js');
+  assert.match(src, /models\/\$\{GEMINI_MODEL\}:generateContent/);
+  assert.match(src, /maxOutputTokens: 1/);
+});
+
+test('Gemini failures log Google\'s error body, not just the status code', () => {
+  const src = readSrc('backend/utils/aiFixEngine.js');
+  assert.match(src, /Gemini API error: \$\{response\.status\} \$\{detail\}/);
 });
 
 test('AI engine label derives the Gemini version from the engine string', () => {
