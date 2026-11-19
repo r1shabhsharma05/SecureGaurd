@@ -7,6 +7,12 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   hasError: boolean;
+  // TEMPORARY diagnostic (19 Nov 2026): the dashboard crashes on every
+  // load and the browser session cannot open DevTools, so the fallback
+  // renders the error itself until the root cause is fixed — then this
+  // goes back to the generic message. Never ship error text to users.
+  errorMessage?: string;
+  componentStack?: string;
 }
 
 /**
@@ -17,12 +23,18 @@ interface ErrorBoundaryState {
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
 
-  static getDerivedStateFromError(): ErrorBoundaryState {
-    return { hasError: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return {
+      hasError: true,
+      errorMessage: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    };
   }
 
   componentDidCatch(error: unknown, info: unknown): void {
     console.error('Unhandled UI error caught by ErrorBoundary:', error, info);
+    this.setState({
+      componentStack: (info as { componentStack?: string })?.componentStack,
+    });
     // Day 9: Sentry capture when a DSN is configured; a no-op otherwise.
     try {
       Sentry.captureException(error, {
@@ -67,6 +79,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           >
             Reload page
           </button>
+          {/* TEMPORARY diagnostic — see state comment above. */}
+          {this.state.errorMessage && (
+            <details open style={{ maxWidth: '44rem', textAlign: 'left', fontSize: '0.8rem' }}>
+              <summary>Error details (temporary diagnostic)</summary>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{this.state.errorMessage}</pre>
+              {this.state.componentStack && (
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{this.state.componentStack}</pre>
+              )}
+            </details>
+          )}
         </div>
       );
     }
