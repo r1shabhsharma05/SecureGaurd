@@ -14,6 +14,8 @@
 
 SecureGuard is a multi-tenant application for repository security scanning, vulnerability management, compliance reporting, SBOM generation, AI remediation, and billing.
 
+**Live:** app https://secureguard-main.vercel.app · API https://securegaurd.onrender.com
+
 This directory is the canonical application root. The Git repository root contains only the entry-point README and this app directory.
 
 ## Architecture
@@ -41,7 +43,7 @@ flowchart LR
     ML -->|0-100 priority| SR[XGBoost severity ranker<br/>v0_heuristic]
     API -->|scan webhooks| GH[GitHub / GitLab]
     API -->|remediation| GEM[Gemini API]
-    API -->|billing| ST[Stripe]
+    API -->|billing| RZ[Razorpay]
 ```
 
 ## Scan data flow
@@ -162,7 +164,7 @@ An end-to-end test run (report: `~/workspace/user/files/secureguard-e2e-report-2
 - **One definition of "how many findings".** Dashboard, Vuln DB, chart and compliance disagreed because each counted a different slice. Canonical: open findings, distinct by (rule, file, line). `GET /api/vulnerabilities` defaults to `status=open`, returns severity-ranked rows with `?page&limit` and `X-Total-Count`. Re-scans no longer insert duplicate rows (`utils/findingDedup.js`, used by the queued and webhook scan paths). The chart renders real per-day counts instead of hardcoded bars; per-scan counters are labelled "at scan time". Compliance counts `ignored` as resolved instead of dropping it from both sides.
 - **SBOM page** falls back to the org-wide list when the per-repo lookup 404s, and shows a real error instead of "No SBOM" when the server fails.
 - **AI fix honesty.** The detail page rendered the real engine from `GET /api/ai/status` (rule-based when no Gemini key is set) instead of a hardcoded "Gemini 1.5 Flash" label, and the fix engine's template score is shown separately labelled — never as the finding's CVSS.
-- **Billing honesty.** An expired subscription period no longer counts as a paid plan; the billing modal says "Billing not configured" when Razorpay keys/plans are missing (vars documented in `backend/.env.example`). The live Pro row from the old mock checkout still needs an owner decision (downgrade to Free or grandfather it).
+- **Billing honesty.** An expired subscription period no longer counts as a paid plan; the billing modal says "Billing not configured" when Razorpay keys/plans are missing (vars documented in `backend/.env.example`). The live Pro row from the old mock checkout ended 19 Nov 2026 and `getOrgPlan` now returns FREE for it, so no manual downgrade is needed.
 - **Analytics scope.** The product-activity panel is labelled site-wide (all accounts), restricted to OWNER/ADMIN, and probe/404 paths no longer top "most visited pages".
 - **Smaller fixes.** Finding IDs are one format (`V-0068`) everywhere; the Vuln DB has a status filter, AI-priority sort and 25/page pagination; the active tab survives refresh (`?tab=`); the header wraps at ~1034px instead of clipping buttons; `/verify-email` and `/oauth/callback` have correct page titles and the email link auto-verifies on landing; the CI/CD template uses the real webhook URL; Settings can edit the profile name (`PATCH /api/auth/me`) and replay onboarding (`/onboarding?replay=1`).
 
@@ -182,12 +184,12 @@ After the E2E fix batch shipped, every load of `/dashboard` showed only the erro
 
 "Scan Now" and "Trigger Scan" did nothing: 12 clicks across two browser runs created no scan, and the `window.confirm` dialog never appeared. The backend was not at fault — POST `/api/scans/trigger` with an API key queued scan #S-0017, which COMPLETED against the real repo (366 files, 39,979 lines, 6.09 s, 72 findings: 45 critical, 22 high, 5 medium). Root cause: the confirm was a native `window.confirm`, which automated browsers auto-dismiss (the Disconnect button's confirm failed the same way, and it checks the confirm before any token guard), and the old "Scan Now" handler navigated to Overview before confirming, so a dismissed confirm looked like a dead button. Fix: the confirm is now an in-page modal (`scanConfirmRepo` state, same `.modal-overlay` pattern as the connect-repo modal); both entry points open it, and Overview navigation + `triggerScan` run only after the user confirms inside it. `triggerScan` also no longer returns silently: a missing repo toasts, and a missing session refreshes once via `refreshSession()` and toasts if the session is dead. Regression test in `backend/tests/e2eFixes.test.js` (now 12 tests) pins the in-page confirm, the navigate-after-confirm order, and the visible failures. Full suite with this fix: 109/111 pass (same 2 pre-existing env failures). The Disconnect button still uses `window.confirm` and has the same defect; it is a separate fix.
 
-Still owner-only (not code): Razorpay keys + plans (onboarding 40%, test key only); Brevo verified sending domain; Google/GitHub OAuth client IDs (Google Cloud sign-in blocked on a stale saved password); a backfill dedupe of the existing finding rows. Done since: phantom repo deleted, real repo r1shabhsharma05/SecureGaurd connected (id 25), first real-repo scan #S-0017 COMPLETED 19 Nov (366 files, 72 findings).
+Owner-only status as of 19 Nov 2026: Google + GitHub OAuth client IDs are created and live on Render (the providers endpoint lists both). Razorpay runs on a regenerated test key — the payment flow is verified working in test mode (Upgrade to Pro reaches the Razorpay hosted page); live keys still need the owner to finish Razorpay onboarding (business type + KYC). Brevo has no verified sending domain (no domain is owned; mail goes from verified senders). Done since: phantom repo deleted, real repo r1shabhsharma05/SecureGaurd connected (id 25), first real-repo scan #S-0017 COMPLETED 19 Nov (366 files, 72 findings), finding-row dedupe applied (3 excess rows in scan 8).
 
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.
 - Authentication, organization context, RBAC, and tenant filters are the authorization boundary.
-- Keep Stripe, GitHub/GitLab, Gemini, database, JWT, encryption, and webhook secrets server-side.
+- Keep Razorpay, GitHub/GitLab, Gemini, database, JWT, encryption, and webhook secrets server-side.
 - Rotate any credential that has ever been committed or exposed.
 - Review `SECURITY_AUDIT.md`, `LIMITATIONS.md`, and `docs/production-readiness-report.md` before production release.
