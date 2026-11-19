@@ -343,26 +343,36 @@ router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', '
 router.get('/stats/summary', async (req, res) => {
   try {
     const { value: summary, hit } = await cache.getOrSet(cache.keys.scanSummary(req.organizationId), cache.TTL.summary, async () => {
-      const vulns = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
-        where: {
-          scan: { organizationId: req.organizationId },
-          status: 'open',
-        },
-        select: { severity: true },
-      }));
+      // One transaction, two queries: this used to open a separate RLS
+      // transaction per query (each = BEGIN + set_config + query +
+      // COMMIT across regions) and ship every open finding's severity
+      // to Node just to count them. groupBy returns <= 4 rows.
+      const { grouped, lastScan } = await withRequestOrgContext(req, async (tx) => {
+        const grouped = await tx.vulnerability.groupBy({
+          by: ['severity'],
+          where: {
+            scan: { organizationId: req.organizationId },
+            status: 'open',
+          },
+          _count: { _all: true },
+        });
+        const lastScan = await tx.scan.findFirst({
+          where: { organizationId: req.organizationId, status: 'completed' },
+          orderBy: { createdAt: 'desc' },
+          select: { durationMs: true, totalFiles: true, createdAt: true },
+        });
+        return { grouped, lastScan };
+      });
 
-      const critical = vulns.filter(v => v.severity === 'critical').length;
-      const high     = vulns.filter(v => v.severity === 'high').length;
-      const medium   = vulns.filter(v => v.severity === 'medium').length;
-      const low      = vulns.filter(v => v.severity === 'low').length;
-      const total    = vulns.length;
+      const countOf = (sev) => grouped.find((g) => g.severity === sev)?._count._all ?? 0;
+      const critical = countOf('critical');
+      const high     = countOf('high');
+      const medium   = countOf('medium');
+      const low      = countOf('low');
+      // Total counts every open row (including any unexpected severity
+      // value), matching the old findMany().length semantics.
+      const total    = grouped.reduce((sum, g) => sum + g._count._all, 0);
       const health   = computeHealthScore({ critical, high, medium, low });
-
-      const lastScan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
-        where: { organizationId: req.organizationId, status: 'completed' },
-        orderBy: { createdAt: 'desc' },
-        select: { durationMs: true, totalFiles: true, createdAt: true },
-      }));
 
       return { critical, high, medium, low, total, health, lastScan };
     });

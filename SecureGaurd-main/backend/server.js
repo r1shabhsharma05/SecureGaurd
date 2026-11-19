@@ -100,8 +100,19 @@ app.use(express.json({
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cookieParser());
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get('/health', async (req, res) => {
+  // The keepalive workflow pings this every 10 min. Exercising the pool
+  // here keeps a DB connection warm, so the first real page load after
+  // idle doesn't pay a cross-region TLS+auth handshake (the DB is a
+  // region away from this server). Always 200: a DB blip must not fail
+  // Render's health check and restart the service — the db field
+  // reports the state instead.
+  let db = 'down';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    db = 'up';
+  } catch { /* reported in the body, never fatal */ }
+  res.json({ status: 'ok', db });
 });
 
 // Day 9 — forced Sentry test error. Exists ONLY when SENTRY_TEST_ROUTE is

@@ -3,7 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
-const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog, clearMembershipCache } = require('../middleware/rbac');
 const { getOrgUsage } = require('../services/billingService');
 const { cancelSubscription } = require('../utils/razorpay');
 const { sendMail } = require('../utils/mailer');
@@ -372,6 +372,10 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
       });
     });
 
+    // Role changed: drop cached membership resolutions so the new role
+    // applies on the member's very next request, not after the TTL.
+    clearMembershipCache();
+
     await createAuditLog(
       req.organizationId,
       req.userId,
@@ -458,6 +462,10 @@ router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOr
       });
     });
 
+    // Member removed: drop cached membership resolutions so the removed
+    // member loses access on their very next request, not after the TTL.
+    clearMembershipCache();
+
     await createAuditLog(
       req.organizationId,
       req.userId,
@@ -508,6 +516,10 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
         where: { id: req.orgMembership.id }
       });
     });
+
+    // Member left: drop cached membership resolutions so access ends
+    // on their very next request, not after the TTL.
+    clearMembershipCache();
 
     await createAuditLog(
       req.organizationId,
@@ -573,6 +585,10 @@ router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrg
         data: { role: 'ADMIN' }
       });
     });
+
+    // Roles swapped: drop cached membership resolutions so both
+    // members' new roles apply on their very next request.
+    clearMembershipCache();
 
     await createAuditLog(
       req.organizationId,

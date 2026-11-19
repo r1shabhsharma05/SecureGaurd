@@ -46,7 +46,7 @@ require.cache[orgMigrationPath] = {
   },
 };
 
-const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog, clearMembershipCache } = require('../middleware/rbac');
 
 const MEMBER = {
   organizationId: 12,
@@ -65,6 +65,9 @@ function reset() {
 }
 
 async function run({ userId = 7, headers = {}, query = {}, body, params = {} } = {}) {
+  // requireOrgContext caches successful resolutions for 60 s; each test
+  // invocation must resolve fresh against its own stubbed impls.
+  clearMembershipCache();
   const req = { userId, headers, query, body, params };
   let statusCode = null;
   let payload = null;

@@ -14,6 +14,7 @@ const { ensureDefaultOrganization } = require('../utils/orgMigration');
 // AuditLog, which needs the org variable — it opens its own
 // withOrgContext unless the caller passes a tx it already runs in.
 const { withUserContext, withOrgContext } = require('../utils/rlsContext');
+const { membershipCache } = require('../utils/membershipCache');
 
 /**
  * Require valid Organization Membership and set req.organizationId & req.orgRole
@@ -32,6 +33,21 @@ async function requireOrgContext(req, res, next) {
   // If route param contains orgId or id (on /api/organizations/:id routes)
   if (!requestedOrgId && req.params && req.params.organizationId) {
     requestedOrgId = req.params.organizationId;
+  }
+
+  // Membership cache (60 s): the lookup below costs a full RLS
+  // transaction across regions on every request. Only successful
+  // resolutions are stored, and membership mutations clear the cache
+  // (routes/organizations.js), so revocation is still immediate. A
+  // malformed org id simply misses the cache and hits the 400 below.
+  const cacheKey = `${req.userId}:${requestedOrgId ? String(requestedOrgId).trim() : ''}`;
+  const cachedMembership = membershipCache.get(cacheKey);
+  if (cachedMembership) {
+    req.organizationId = cachedMembership.organizationId;
+    req.organization = cachedMembership.organization;
+    req.orgMembership = cachedMembership;
+    req.orgRole = cachedMembership.role;
+    return next();
   }
 
   try {
@@ -91,6 +107,8 @@ async function requireOrgContext(req, res, next) {
           }));
       }
     }
+
+    membershipCache.set(cacheKey, membership);
 
     req.organizationId = membership.organizationId;
     req.organization = membership.organization;
@@ -166,4 +184,7 @@ module.exports = {
   requireOrgContext,
   requireOrgRole,
   createAuditLog,
+  // Test hook + mutation invalidation: membership changes clear the
+  // whole cache so a removed/demoted member loses access immediately.
+  clearMembershipCache: () => membershipCache.clear(),
 };

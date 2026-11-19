@@ -214,6 +214,18 @@ An evening re-test (HEAD `ffad4fa`) verified 6 of the afternoon fixes live and f
 
 Tests: backend suite 134/136 pass (same 2 pre-existing env failures), including 15 new regressions in `backend/tests/retest2Fixes.test.js`; `rlsContext.test.js` updated for the single-statement context set. Frontend build green; eslint shows only the 8 pre-existing `set-state-in-effect` errors, none in changed code.
 
+## Perf fix batch — 19 Nov 2026 (night)
+
+Pages still took ~20 s on first load despite the keepalive workflow. Root causes were in the database path, not the frontend:
+
+- **Connection pool kept warm.** The `pg` pool used defaults: idle clients reaped after 30 s, max 10. With the database a region away from the app server, every visit paid fresh cross-region TLS+auth handshakes, and the dashboard's parallel requests queued behind 10 clients until transaction starts timed out (P2028 retries stretched loads to ~20 s). The pool now never reaps idle clients (`idleTimeoutMillis: 0`), uses TCP keepalive, allows 15 clients, and logs (instead of crashing on) idle-client errors.
+- **`/health` warms the database too.** It now runs `SELECT 1` through the pool, so the keepalive ping exercises a DB connection, not just the Node process. It still always returns 200 (a DB blip must not fail Render's health check); the body reports `db: "up" | "down"`.
+- **Membership resolution cached 60 s.** `requireOrgContext` ran a full RLS transaction (BEGIN + `set_config` + lookup + COMMIT, ~4 cross-region round trips) on every request before the handler's own transaction. Successful resolutions are now cached in memory for 60 s (`backend/utils/membershipCache.js`). Membership mutations (role change, remove, leave, ownership transfer) clear the cache, so revocation stays immediate; malformed org ids still 400 and are never cached.
+- **Dashboard summary: one transaction, counted in SQL.** `/api/scans/stats/summary` opened two RLS transactions and shipped every open finding's severity to Node to count in JS. It now runs one transaction with a `groupBy` severity count (≤ 4 rows) plus the last-scan lookup. Response shape unchanged.
+- **Keepalive: workflow works, GitHub's scheduler didn't.** The keepalive workflow produced zero scheduled runs in its first 4 hours (verified on the Actions page); a manual dispatch ran green in 7 s and `/health` answered, so the workflow itself is fine — GitHub schedules are best-effort and `*/10` at minute boundaries is the most-dropped slot. The cron now fires at off-peak minutes (`3,13,23,33,43,53`). If scheduled runs still don't appear, the reliable options are an external pinger (UptimeRobot/cron-job.org) or a paid Render instance — both need an owner decision.
+
+Tests: backend suite 147/149 pass (same 2 pre-existing env failures), including 8 new regressions in `backend/tests/perfFixes.test.js` (cache behavior, cache-hit skips the DB lookup, malformed-id 400, pool/health/stats source pins); `rbac.test.js` clears the cache per invocation. Eslint: 0 errors in changed code.
+
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.
