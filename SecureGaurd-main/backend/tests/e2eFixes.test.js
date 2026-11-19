@@ -227,3 +227,66 @@ test('advisory locks: pg_advisory_xact_lock is only ever called via $executeRaw'
   // 1 in repos.js (create) + 3 in organizations.js (demote/remove/leave).
   assert.equal(executeRawLocks, 4);
 });
+
+// ── Dashboard TDZ crash (19 Nov 2026) ─────────────────────────────────────
+// The live dashboard showed only the error boundary:
+// "ReferenceError: Cannot access 'pt' before initialization".
+// Root cause: Dashboard.tsx had `useEffect(() => { setVulnPage(1); },
+// [filterSev, filterType, filterStatus, searchQuery])` ~200 lines BEFORE
+// the useState lines that declare those variables. A useEffect dependency
+// array is evaluated at render time, so the render read the `const`
+// bindings while they were still in the temporal dead zone and the whole
+// dashboard crashed on every tab. Fix: the effect lives below the filter
+// state declarations. This test pins that ordering for every useEffect
+// dep in Dashboard.tsx (and the other routed pages).
+test('dashboard TDZ: no useEffect dependency is declared after its effect', () => {
+  const pages = [
+    'Dashboard.tsx',
+    'ScanDetailPage.tsx',
+    'VulnerabilityDetailsPage.tsx',
+    'SbomPage.tsx',
+    'OrganizationSettingsModal.tsx',
+  ];
+  for (const page of pages) {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'components', page),
+      'utf8'
+    );
+    const lines = src.split('\n');
+    const declLine = new Map();
+    lines.forEach((ln, i) => {
+      const m = ln.match(/^\s*const\s+\[(\w+)/) || ln.match(/^\s*const\s+(\w+)\s*=\s*(?:use\w+|React\.use\w+)/);
+      if (m && !declLine.has(m[1])) declLine.set(m[1], i + 1);
+    });
+    const re = /useEffect\(\(\)\s*=>\s*\{?[\s\S]{0,400}?,\s*\[([^\]]*)\]\)/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const effectLine = src.slice(0, m.index).split('\n').length;
+      for (const dep of m[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+        assert.ok(
+          !declLine.has(dep) || declLine.get(dep) < effectLine,
+          `${page}:${effectLine}: useEffect depends on '${dep}' declared at line ${declLine.get(dep)} — ` +
+          'a dep declared after its effect throws "Cannot access ... before initialization" (TDZ) on every render'
+        );
+      }
+    }
+  }
+  // The exact effect that crashed the dashboard is gone, not moved: the
+  // filter-reset was an effect that called setVulnPage(1) on filter change
+  // (and the react-hooks/set-state-in-effect rule flags that pattern too).
+  // The reset now lives in the filter change handlers. Pin both halves:
+  // no effect depends on the filter state, and every filter control
+  // resets the page.
+  const dash = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'components', 'Dashboard.tsx'),
+    'utf8'
+  );
+  assert.ok(
+    !/useEffect\([^)]*\[\s*[^\]]*(filterSev|filterType|filterStatus|searchQuery)/.test(dash),
+    'no useEffect may depend on the Vuln DB filter state — the page reset lives in the change handlers'
+  );
+  assert.equal(
+    (dash.match(/setVulnPage\(1\)/g) || []).length, 5,
+    'setVulnPage(1) must appear once per filter control: severity x2, type, status, search'
+  );
+});

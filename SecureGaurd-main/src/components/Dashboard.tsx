@@ -159,8 +159,6 @@ export default function Dashboard() {
     params.set('tab', activeNav);
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
   }, [activeNav]);
-  // Back to page 1 whenever a Vuln DB filter changes.
-  useEffect(() => { setVulnPage(1); }, [filterSev, filterType, filterStatus, searchQuery]);
   // SEC-39 — mobile nav: the sidebar is display:none ≤768px, so without
   // this the 10 nav items are unreachable on a phone.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -1100,7 +1098,7 @@ export default function Dashboard() {
                 type="text" 
                 placeholder={activeNav === 'repos' ? 'Search repos…' : 'Search files, vulns…'} 
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
+                onChange={e => { setSearchQuery(e.target.value); setVulnPage(1); }}
               />
             </div>
             {activeNav === 'overview' && (
@@ -1238,7 +1236,7 @@ export default function Dashboard() {
                       <button
                         key={s}
                         className={`filter-btn ${filterSev === s ? 'active' : ''}`}
-                        onClick={() => setFilterSev(s)}
+                        onClick={() => { setFilterSev(s); setVulnPage(1); }}
                       >
                         {s}
                       </button>
@@ -1248,7 +1246,7 @@ export default function Dashboard() {
                       <button
                         key={t}
                         className={`filter-btn ${filterType === t ? 'active' : ''}`}
-                        onClick={() => setFilterType(t)}
+                        onClick={() => { setFilterType(t); setVulnPage(1); }}
                       >
                         {t}
                       </button>
@@ -1690,7 +1688,7 @@ export default function Dashboard() {
                   <button
                     key={s}
                     className={`filter-btn ${filterSev === s ? 'active' : ''}`}
-                    onClick={() => setFilterSev(s)}
+                    onClick={() => { setFilterSev(s); setVulnPage(1); }}
                   >
                     {s}
                   </button>
@@ -1703,7 +1701,7 @@ export default function Dashboard() {
                 <button
                   key={s}
                   className={`filter-btn ${filterStatus === s ? 'active' : ''}`}
-                  onClick={() => setFilterStatus(s)}
+                  onClick={() => { setFilterStatus(s); setVulnPage(1); }}
                 >
                   {s === 'FALSE_POSITIVE' ? 'FALSE POSITIVE' : s}
                 </button>
