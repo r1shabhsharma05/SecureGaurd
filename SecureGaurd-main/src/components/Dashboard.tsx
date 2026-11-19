@@ -14,6 +14,7 @@ import { useToast } from './Toast';
 import { deleteAccount, changePassword, resendVerification } from '../services/authService';
 import { trackEvent } from '../utils/analytics';
 import Breadcrumbs from './Breadcrumbs';
+import ConfirmModal from './ConfirmModal';
 import EmptyState from './EmptyState';
 import { PageSkeleton } from './Skeleton';
 import { OrganizationSwitcher } from './OrganizationSwitcher';
@@ -177,6 +178,16 @@ export default function Dashboard() {
   // after the user confirms inside it.
   const [scanConfirmRepo, setScanConfirmRepo] = useState<Repository | null>(null);
 
+  // Generic in-page confirm for destructive actions (Disconnect, Revoke).
+  // Native window.confirm froze tabs / never appeared in automated
+  // browsers — the same defect the scan modal above fixed.
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    run: () => void;
+  } | null>(null);
+
   // Profile name edit — there was no way to fix a name typed wrong at
   // signup short of a database edit (PATCH /api/auth/me is new).
   const [editFirstName, setEditFirstName] = useState('');
@@ -260,8 +271,16 @@ export default function Dashboard() {
     }
   };
 
-  const handleRevokeApiKey = async (id: number, name: string) => {
-    if (!window.confirm(`Revoke API key "${name}"? Scripts using it will stop working.`)) return;
+  const handleRevokeApiKey = (id: number, name: string) => {
+    setConfirmAction({
+      title: 'Revoke API key?',
+      body: `Revoke API key "${name}"? Scripts using it will stop working.`,
+      confirmLabel: 'Revoke key',
+      run: () => void doRevokeApiKey(id),
+    });
+  };
+
+  const doRevokeApiKey = async (id: number) => {
     try {
       const res = await orgFetch(`/api/api-keys/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error();
@@ -593,8 +612,17 @@ export default function Dashboard() {
     }
   };
 
-  const handleDeleteRepo = async (id: number) => {
-    if (!window.confirm('Are you sure you want to disconnect this repository?') || !accessToken) return;
+  const handleDeleteRepo = (id: number) => {
+    if (!accessToken) return;
+    setConfirmAction({
+      title: 'Disconnect repository?',
+      body: 'Are you sure you want to disconnect this repository? Its scans and findings will be removed.',
+      confirmLabel: 'Disconnect',
+      run: () => void doDeleteRepo(id),
+    });
+  };
+
+  const doDeleteRepo = async (id: number) => {
     try {
       const res = await orgFetch(`/api/repos/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -1185,6 +1213,9 @@ export default function Dashboard() {
         {activeNav === 'overview' && (
           <>
             {/* Stats Row */}
+            <p className="section-sub" style={{ marginBottom: '0.75rem' }}>
+              Severity counts are open findings across all repositories. Files and scan time are from the most recent completed scan.
+            </p>
             <div className="stats-grid">
               <div className="stat-card">
                 <div className="stat-top">
@@ -1218,22 +1249,22 @@ export default function Dashboard() {
               </div>
               <div className="stat-card">
                 <div className="stat-top">
-                  <span className="stat-label">Files Scanned</span>
+                  <span className="stat-label">Files (latest scan)</span>
                   <FileCode2 size={16} className="stat-icon" />
                 </div>
                 <div className="stat-value">{stats.filesScanned > 0 ? stats.filesScanned.toLocaleString() : '0'}</div>
-                <p className="stat-hint">Ephemerally evaluated</p>
+                <p className="stat-hint">In the most recent completed scan</p>
               </div>
               <div className="stat-card">
                 <div className="stat-top">
-                  <span className="stat-label">Avg Scan Time</span>
+                  <span className="stat-label">Latest scan time</span>
                   <Zap size={16} className="stat-icon" />
                 </div>
                 <div className="stat-value">
                   {stats.scanTime > 0 ? (stats.scanTime / 1000).toFixed(2) : '0.00'}
                   <span className="stat-unit">s</span>
                 </div>
-                <p className="stat-hint">Lightning fast detection</p>
+                <p className="stat-hint">Duration of the most recent scan</p>
               </div>
             </div>
 
@@ -1544,6 +1575,9 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+              <p className="section-sub" style={{ marginTop: '0.5rem' }}>
+                Bars show findings recorded by completed scans each day. “Now” is the current open total across all repositories.
+              </p>
             </section>
           </>
         )}
@@ -2380,6 +2414,20 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          body={confirmAction.body}
+          confirmLabel={confirmAction.confirmLabel}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            action.run();
+          }}
+        />
       )}
 
       <OrganizationSettingsModal

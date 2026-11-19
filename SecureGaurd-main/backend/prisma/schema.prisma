@@ -259,6 +259,8 @@ model Vulnerability {
   status          String   @default("open") // open | fixed | ignored | false_positive
   aiFix           String?
   aiFixApplied    Boolean  @default(false)
+  aiFixEngine     String?
+  detectedInScanIds Int[]
   mlFeatures      Json?
   userLabel       String?
   createdAt       DateTime @default(now())

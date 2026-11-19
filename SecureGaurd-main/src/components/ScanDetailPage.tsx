@@ -139,7 +139,11 @@ export default function ScanDetailPage() {
           <h2>Findings in this scan ({scan.vulnerabilities.length})</h2>
           {scan.vulnerabilities.length === 0 ? (
             <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-              {scan.status === 'completed' ? 'No findings — clean scan.' : 'No findings were recorded for this scan.'}
+              {scan.status === 'completed'
+                ? total > 0
+                  ? `This scan recorded ${total} finding${total === 1 ? '' : 's'} at scan time, but every one matched a finding already tracked from an earlier scan, so no new rows were added. They are listed in the Vulnerability Database.`
+                  : 'No findings — clean scan.'
+                : 'No findings were recorded for this scan.'}
             </p>
           ) : (
             <div className="table-scroll-x">

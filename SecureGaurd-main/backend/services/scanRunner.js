@@ -22,7 +22,7 @@ const { runScanInThread } = require('../workers/scanThreadPool');
 const { storedRuleToParsed } = require('../utils/customRules');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
-const { dedupeFindings } = require('../utils/findingDedup');
+const { partitionFindings, normalizePath } = require('../utils/findingDedup');
 const { withOrgContext } = require('../utils/rlsContext');
 const { invalidateOrg } = require('../utils/cache');
 
@@ -90,7 +90,24 @@ async function markFailed(organizationId, userId, scanId, reason) {
 }
 
 async function executeScan({ scanId, organizationId, userId, repositoryId }) {
-  const ctx = (fn) => withOrgContext(organizationId, userId, fn);
+  // P2028 = the interactive transaction could not START in time (pool
+  // contention on the free-tier database) — nothing executed, so a
+  // short retry is safe and keeps a contended moment from failing the
+  // whole scan. Any other error propagates immediately.
+  const ctx = async (fn) => {
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await withOrgContext(organizationId, userId, fn);
+      } catch (err) {
+        lastErr = err;
+        const isP2028 = err?.code === 'P2028' || /P2028/.test(err?.message || '');
+        if (!isP2028 || attempt === 2) throw err;
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
   let scanTarget = null;
   try {
     const repo = await ctx((tx) => tx.repository.findFirst({
@@ -275,11 +292,15 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
       // this every re-scan doubled the Vulnerability table and the counts
       // on every surface diverged. A finding fixed since the last scan is
       // re-inserted (only open rows are skipped), so a regression re-opens.
+      // Paths are compared normalised (wrapper segment stripped) and
+      // stored normalised, so "SecureGaurd-main/backend/..." and
+      // "backend/..." are one finding, not two.
+      const stripPrefixes = [repo.name, `${repo.name}-main`, `${repo.name}-master`];
       const alreadyOpen = await ctx((tx) => tx.vulnerability.findMany({
         where: { status: 'open', scan: { repositoryId: repo.id, organizationId } },
-        select: { ruleId: true, filePath: true, lineStart: true },
+        select: { id: true, ruleId: true, filePath: true, lineStart: true },
       }));
-      const freshFindings = dedupeFindings(finalFindings, alreadyOpen);
+      const { fresh: freshFindings, matched } = partitionFindings(finalFindings, alreadyOpen, { stripPrefixes });
       const dbFindings = freshFindings.map(f => ({
         scanId: scan.id,
         ruleId: f.ruleId,
@@ -287,7 +308,7 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
         type: f.type,
         severity: f.severity,
         title: f.title,
-        filePath: f.filePath,
+        filePath: normalizePath(f.filePath, stripPrefixes),
         lineStart: f.lineStart,
         lineEnd: f.lineEnd,
         codeSnippet: f.codeSnippet,
@@ -297,6 +318,20 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
         mlFeatures: f.mlFeatures ? f.mlFeatures : null
       }));
       if (dbFindings.length > 0) await ctx((tx) => tx.vulnerability.createMany({ data: dbFindings }));
+      // Record the re-detections: the scan-detail page lists findings by
+      // scanId OR detectedInScanIds, so a scan that deduped everything
+      // still shows what it found instead of an empty list.
+      const matchedIds = [...new Set(matched.map((m) => m.existingId).filter(Boolean))];
+      if (matchedIds.length > 0) {
+        await ctx(async (tx) => {
+          for (const vid of matchedIds) {
+            await tx.vulnerability.update({
+              where: { id: vid },
+              data: { detectedInScanIds: { push: scan.id } },
+            });
+          }
+        });
+      }
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';
@@ -389,7 +424,10 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
       'SCAN_COMPLETED',
       'SCAN',
       String(scan.id),
-      { repoName: repo.name, findingsCount: finalFindings.length, criticalCount: critCount }
+      // findingsCount uses the same definition as the scan row counters
+      // (open findings); totalDetected keeps the raw detection count
+      // (open + classifier-suppressed) for anyone who needs it.
+      { repoName: repo.name, findingsCount: critCount + highCount + medCount + lowCount, totalDetected: finalFindings.length, criticalCount: critCount }
     );
 
     // Day 7 — opt-in scan-completion alerts (Slack + email). Best-effort:

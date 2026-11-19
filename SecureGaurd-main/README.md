@@ -186,6 +186,19 @@ After the E2E fix batch shipped, every load of `/dashboard` showed only the erro
 
 Owner-only status as of 19 Nov 2026: Google + GitHub OAuth client IDs are created and live on Render (the providers endpoint lists both). Razorpay runs on a regenerated test key — the payment flow is verified working in test mode (Upgrade to Pro reaches the Razorpay hosted page); live keys still need the owner to finish Razorpay onboarding (business type + KYC). Brevo has no verified sending domain (no domain is owned; mail goes from verified senders). Done since: phantom repo deleted, real repo r1shabhsharma05/SecureGaurd connected (id 25), first real-repo scan #S-0017 COMPLETED 19 Nov (366 files, 72 findings), finding-row dedupe applied (3 excess rows in scan 8).
 
+## Re-test fix batch — 19 Nov 2026 (afternoon)
+
+An afternoon re-test (HEAD `f1527bf`) confirmed the morning fixes and found the data story still broken. Fixed in this batch (migration `20261119_detected_scans_ai_engine`):
+
+- **Scan detail lists what the scan detected.** A re-scan that deduped everything inserted 0 rows, so `/scans/:id` showed "Findings in this scan (0)" under a 37-finding header. Re-detections now append to `Vulnerability.detectedInScanIds`, and the detail endpoint lists rows by `scanId` OR `detectedInScanIds`. Historical fully-deduped scans (e.g. S-0019) get an honest empty-state message instead of "clean scan".
+- **One counts definition, labelled.** The audit log's `findingsCount` counted every detection (open + classifier-suppressed) while scan counters count open only — it now matches the counters, with the raw total kept as `totalDetected`. Dashboard severity cards are labelled "open findings across all repositories"; Files/Time cards now say they come from the most recent completed scan (they were mislabelled "Avg"). The activity chart caption states both definitions. Compliance previews state their scope (one repo, scan date range). Health score is now a severity-mix score (0–100) instead of an absolute-count formula that pinned at 0 for any repo with 7+ criticals.
+- **No native `window.confirm` anywhere.** Disconnect, Revoke API key, Delete compliance report, Leave organization, Transfer ownership, and Cancel subscription all use the in-page `ConfirmModal` (native confirms froze tabs / never appeared in automated browsers).
+- **AI fix label tells the truth for cached fixes.** The engine that generated a fix is stored (`aiFixEngine`) and returned for cached fixes; legacy cached fixes with no recorded engine show a neutral label instead of claiming the configured Gemini engine.
+- **Dedup path normalisation + P2028 resilience.** Paths are compared and stored normalised (wrapper segment stripped), so `SecureGaurd-main/backend/...` and `backend/...` are one finding. RLS transactions wait up to 10 s to start (Prisma's 2 s default threw P2028 under pool contention and failed scans), and the scan worker retries P2028 up to 3 times.
+- **SBOM page lists every SBOM.** It used the per-repo endpoint, which returns only the latest SBOM for one repo; it now loads the org-wide list and pre-selects the chosen repo's newest.
+
+Tests: backend suite 119/121 pass (same 2 pre-existing env failures: compliance needs live Postgres, deployment_config needs secrets), including 10 new regressions in `backend/tests/retestFixes.test.js`. Frontend build green; eslint shows only the 9 pre-existing `set-state-in-effect` errors, none in changed code.
+
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.

@@ -10,6 +10,7 @@ import { useToast } from './Toast';
 import { trackEvent } from '../utils/analytics';
 import { SkeletonTable } from './Skeleton';
 import EmptyState from './EmptyState';
+import ConfirmModal from './ConfirmModal';
 import './ComplianceReports.css';
 
 interface Repository {
@@ -94,6 +95,7 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
 
   // Modal State: Create Report
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [deleteReportId, setDeleteReportId] = useState<number | null>(null);
   const [selectedRepoId, setSelectedRepoId] = useState<number | ''>(repos.length > 0 ? repos[0].id : '');
   const [selectedFramework, setSelectedFramework] = useState('SOC2');
   const [dateRangeOption, setDateRangeOption] = useState('30d');
@@ -194,10 +196,13 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
     }
   };
 
-  const handleDeleteReport = async (id: number, e: React.MouseEvent) => {
+  const handleDeleteReport = (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Are you sure you want to delete this compliance report?') || !accessToken) return;
+    if (!accessToken) return;
+    setDeleteReportId(id);
+  };
 
+  const doDeleteReport = async (id: number) => {
     try {
       const res = await orgFetch(`/api/compliance/reports/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -642,6 +647,9 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
                   <p className="preview-subtitle">
                     {previewReport.repository?.fullName} • Generated {new Date(previewReport.createdAt).toLocaleDateString()}
                   </p>
+                  <p className="preview-subtitle">
+                    Scope: findings from scans of this repository between {new Date(previewReport.fromDate).toLocaleDateString()} and {new Date(previewReport.toDate).toLocaleDateString()} — not the dashboard’s all-time open total.
+                  </p>
                 </div>
               </div>
               <div className="preview-header-actions">
@@ -787,6 +795,20 @@ export default function ComplianceReports({ accessToken, refreshSession, repos }
             </div>
           </div>
         </div>
+      )}
+
+      {deleteReportId !== null && (
+        <ConfirmModal
+          title="Delete compliance report?"
+          body="Are you sure you want to delete this compliance report? This cannot be undone."
+          confirmLabel="Delete report"
+          onCancel={() => setDeleteReportId(null)}
+          onConfirm={() => {
+            const id = deleteReportId;
+            setDeleteReportId(null);
+            void doDeleteReport(id);
+          }}
+        />
       )}
     </div>
   );

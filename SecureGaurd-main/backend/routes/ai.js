@@ -35,7 +35,11 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
         vulnId: vuln.id,
         fixedCode: vuln.aiFix,
         cached: true,
-        aiFixApplied: vuln.aiFixApplied
+        aiFixApplied: vuln.aiFixApplied,
+        // The engine that actually generated this cached fix (null for
+        // fixes cached before the column existed — the UI then stays
+        // neutral instead of claiming the configured engine).
+        engine: vuln.aiFixEngine || null
       });
     }
 
@@ -61,6 +65,7 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
       where: { id: vuln.id },
       data: {
         aiFix: result.fixedCode,
+        aiFixEngine: result.engine,
       }
     }));
 

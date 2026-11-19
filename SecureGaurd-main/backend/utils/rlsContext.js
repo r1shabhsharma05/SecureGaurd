@@ -61,6 +61,13 @@ const prisma = require('../prismaClient');
 
 const storage = new AsyncLocalStorage();
 
+// Prisma's defaults (maxWait 2 s, timeout 5 s) are too tight for the
+// pooled free-tier database: under contention a transaction that cannot
+// START within maxWait throws P2028 and fails the whole request/scan.
+// Wait longer for a connection and allow the short RLS transactions
+// room to finish.
+const TX_OPTIONS = { maxWait: 10000, timeout: 30000 };
+
 /**
  * Parse an org/user id the way the policies need it: a plain integer.
  * Rejects the parseInt-coercion trap (parseInt("12abc") === 12 — the
@@ -126,7 +133,7 @@ function createRlsContext(client) {
     return client.$transaction(async (tx) => {
       await setOrgContext(tx, org, user);
       return fn(tx);
-    });
+    }, TX_OPTIONS);
   }
 
   async function withUserContext(userId, fn) {
@@ -134,7 +141,7 @@ function createRlsContext(client) {
     return client.$transaction(async (tx) => {
       await setUserContext(tx, user);
       return fn(tx);
-    });
+    }, TX_OPTIONS);
   }
 
   /** Run `fn(tx)` with only the org variable set (rule 6 — no user). */
@@ -143,7 +150,7 @@ function createRlsContext(client) {
     return client.$transaction(async (tx) => {
       await setOrgOnlyContext(tx, org);
       return fn(tx);
-    });
+    }, TX_OPTIONS);
   }
 
   /** Convenience wrapper reading the ids off the request (after auth + requireOrgContext). */

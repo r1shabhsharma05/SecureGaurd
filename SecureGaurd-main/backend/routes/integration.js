@@ -6,7 +6,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { runSecurityScan } = require('../utils/securityScanner');
 const { mapRuleId } = require('../utils/ruleMap');
 const { resolveScanTarget } = require('../utils/repoScanSource');
-const { dedupeFindings } = require('../utils/findingDedup');
+const { partitionFindings, normalizePath } = require('../utils/findingDedup');
 const crypto = require('crypto');
 const { encrypt, decrypt } = require('../utils/cryptoUtils');
 const { checkCanTriggerScan } = require('../services/billingService');
@@ -289,11 +289,16 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
     if (finalFindings.length > 0) {
       // Same dedup as scanRunner: a push re-scan must not insert a second
       // copy of a finding already open for this repo (rule + file + line).
+      // Paths are compared/stored normalised, and re-detections are
+      // recorded in detectedInScanIds so the scan-detail page can list
+      // what this scan found even when it inserted nothing.
+      const stripPrefixes = [repo.name, `${repo.name}-main`, `${repo.name}-master`];
       const alreadyOpen = await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.findMany({
         where: { status: 'open', scan: { repositoryId: repo.id, organizationId: repo.organizationId } },
-        select: { ruleId: true, filePath: true, lineStart: true },
+        select: { id: true, ruleId: true, filePath: true, lineStart: true },
       }));
-      const dbFindings = dedupeFindings(finalFindings, alreadyOpen)
+      const { fresh: freshFindings, matched } = partitionFindings(finalFindings, alreadyOpen, { stripPrefixes });
+      const dbFindings = freshFindings
         .map(f => ({
         scanId: scan.id,
         ruleId: f.ruleId,
@@ -301,13 +306,24 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         type: f.type,
         severity: f.severity,
         title: f.title,
-        filePath: f.filePath,
+        filePath: normalizePath(f.filePath, stripPrefixes),
         lineStart: f.lineStart,
         lineEnd: f.lineEnd,
         codeSnippet: f.codeSnippet,
         status: 'open'
       }));
       if (dbFindings.length > 0) await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
+      const matchedIds = [...new Set(matched.map((m) => m.existingId).filter(Boolean))];
+      if (matchedIds.length > 0) {
+        await withOrgContext(repo.organizationId, repo.userId, async (tx) => {
+          for (const vid of matchedIds) {
+            await tx.vulnerability.update({
+              where: { id: vid },
+              data: { detectedInScanIds: { push: scan.id } },
+            });
+          }
+        });
+      }
     }
 
     const riskLevel = critCount > 0 ? 'critical' : highCount > 2 ? 'high' : medCount > 3 ? 'medium' : 'low';

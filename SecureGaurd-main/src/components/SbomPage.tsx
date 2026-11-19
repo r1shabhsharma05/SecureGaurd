@@ -86,24 +86,20 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
     setLoading(true);
     setError(null);
     try {
-      const url = selectedRepoId
-        ? `/api/sboms/repository/${selectedRepoId}`
-        : '/api/sboms';
-
-      let res = await orgFetch(url);
-      // The per-repo lookup 404s when the SBOM rows point at a different
-      // repo id than the one the UI shows (or RLS hides them) — fall back
-      // to the org-wide list instead of silently showing "none".
-      if (!res.ok && selectedRepoId) {
-        res = await orgFetch('/api/sboms');
-      }
+      // Always load the org-wide list: the per-repo endpoint returns only
+      // the LATEST SBOM for one repo, which hid every other repo's SBOM
+      // (and all older scans) with no way to switch. The selector lists
+      // every SBOM; a selected repo just pre-selects its newest.
+      const res = await orgFetch('/api/sboms');
       if (res.ok) {
         const data = await res.json();
         const list = Array.isArray(data) ? data : [data];
         setSboms(list);
         if (list.length > 0) {
-          // Load complete details for first SBOM
-          fetchSbomDetails(list[0].id);
+          const preferred = selectedRepoId
+            ? list.find((s) => s.repository?.id === selectedRepoId) || list[0]
+            : list[0];
+          fetchSbomDetails(preferred.id);
         } else {
           setSelectedSbom(null);
         }
@@ -282,7 +278,7 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
             >
               {sboms.map(s => (
                 <option key={s.id} value={s.id}>
-                  {s.repository?.name || s.name} ({new Date(s.createdAt).toLocaleDateString()})
+                  {s.repository?.name || s.name}{s.scan ? ` · scan #S-${String(s.scan.id).padStart(4, '0')}` : ''} ({new Date(s.createdAt).toLocaleDateString()})
                 </option>
               ))}
             </select>

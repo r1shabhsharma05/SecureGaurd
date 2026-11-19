@@ -20,6 +20,7 @@ const cache = require('../utils/cache');
 // segment gets its own short context instead. dispatchScanAlerts takes
 // the handler's tx when one exists (see the call site).
 const { withRequestOrgContext, withUserContext, withOrgContext } = require('../utils/rlsContext');
+const { computeHealthScore } = require('../utils/healthScore');
 
 // GET /api/scans/export-feedback — export user feedback labels for retraining.
 // Two caller kinds: the classifier service (shared CLASSIFIER_API_KEY header,
@@ -152,12 +153,20 @@ router.get('/:id', async (req, res) => {
     }
     const scan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
       where: { id: scanId, organizationId: req.organizationId },
-      include: {
-        repository: true,
-        vulnerabilities: { orderBy: [{ severity: 'asc' }, { createdAt: 'desc' }] },
-      },
+      include: { repository: true },
     }));
     if (!scan) return res.status(404).json({ message: 'Scan not found' });
+    // Findings this scan DETECTED: rows it inserted (scanId) plus rows it
+    // re-detected that dedup matched against an earlier scan's open row
+    // (detectedInScanIds). Listing only inserted rows made a fully
+    // deduped re-scan show "0 findings" under a non-zero header count.
+    scan.vulnerabilities = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
+      where: {
+        scan: { organizationId: req.organizationId },
+        OR: [{ scanId }, { detectedInScanIds: { has: scanId } }],
+      },
+      orderBy: [{ severity: 'asc' }, { createdAt: 'desc' }],
+    }));
     if (scan.status === 'completed' || scan.status === 'failed') {
       await cache.set(cache.keys.scanDetail(req.organizationId, scanId), scan, cache.TTL.terminalScan);
       res.set('X-Cache', 'MISS');
@@ -347,7 +356,7 @@ router.get('/stats/summary', async (req, res) => {
       const medium   = vulns.filter(v => v.severity === 'medium').length;
       const low      = vulns.filter(v => v.severity === 'low').length;
       const total    = vulns.length;
-      const health   = Math.max(0, 100 - critical * 15 - high * 8 - medium * 3 - low);
+      const health   = computeHealthScore({ critical, high, medium, low });
 
       const lastScan = await withRequestOrgContext(req, (tx) => tx.scan.findFirst({
         where: { organizationId: req.organizationId, status: 'completed' },

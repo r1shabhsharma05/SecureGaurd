@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Check, AlertCircle } from 'lucide-react';
 import { toErrorMessage } from '../services/ApiError';
 import { Skeleton } from './Skeleton';
+import ConfirmModal from './ConfirmModal';
 import './OrganizationSettingsModal.css';
 
 interface Props {
@@ -75,6 +76,14 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   const [loadingBilling, setLoadingBilling] = useState(false);
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  // In-page confirm for leave/transfer/cancel — native window.confirm
+  // froze tabs in testing (same defect as the dashboard confirms).
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    run: () => void;
+  } | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
 
@@ -199,8 +208,16 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     }
   };
 
-  const handleLeaveOrganization = async () => {
-    if (!window.confirm('Leave this organization? You will lose access to its repositories, scans, and reports.')) return;
+  const handleLeaveOrganization = () => {
+    setConfirmAction({
+      title: 'Leave this organization?',
+      body: 'Leave this organization? You will lose access to its repositories, scans, and reports.',
+      confirmLabel: 'Leave organization',
+      run: () => void doLeaveOrganization(),
+    });
+  };
+
+  const doLeaveOrganization = async () => {
     setLeaving(true);
     setError(null);
 
@@ -214,8 +231,16 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     }
   };
 
-  const handleTransferOwnership = async (memberId: number, memberName: string) => {
-    if (!window.confirm(`Transfer ownership to ${memberName}? You will become an Admin and can no longer transfer ownership or delete this organization.`)) return;
+  const handleTransferOwnership = (memberId: number, memberName: string) => {
+    setConfirmAction({
+      title: 'Transfer ownership?',
+      body: `Transfer ownership to ${memberName}? You will become an Admin and can no longer transfer ownership or delete this organization.`,
+      confirmLabel: 'Transfer ownership',
+      run: () => void doTransferOwnership(memberId),
+    });
+  };
+
+  const doTransferOwnership = async (memberId: number) => {
     setError(null);
 
     try {
@@ -254,10 +279,17 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   const formatPlanPrice = (price: PlanPrice | null | undefined) =>
     price ? `₹${(price.amountPaise / 100).toLocaleString('en-IN')} ` : null;
 
-  const handleCancelSubscription = async () => {
+  const handleCancelSubscription = () => {
     if (!isOwner) return;
-    if (!window.confirm('Are you sure you want to schedule cancellation at the end of the billing period?')) return;
+    setConfirmAction({
+      title: 'Cancel subscription?',
+      body: 'Are you sure you want to schedule cancellation at the end of the billing period?',
+      confirmLabel: 'Schedule cancellation',
+      run: () => void doCancelSubscription(),
+    });
+  };
 
+  const doCancelSubscription = async () => {
     setCanceling(true);
     setError(null);
 
@@ -799,6 +831,20 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
           )}
         </div>
       </div>
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          body={confirmAction.body}
+          confirmLabel={confirmAction.confirmLabel}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            action.run();
+          }}
+        />
+      )}
     </div>
   );
 };
