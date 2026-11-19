@@ -20,6 +20,18 @@ those edits landed, and line numbers below are as read in that final
 pass — re-check them if any route file changes again before push.
 Previous audit: 2026-10-24. Since then: 64 commits, 20 touching
 `backend/routes/`.
+**Day 7 re-count 2026-11-20 (HEAD `7d471db`):** 95 router routes
+(44 GET, 34 POST, 8 PATCH, 8 DELETE, 1 PUT) + 2 server-level = **97**
+(was 92). The 5 routes added since 18 Nov are all AUTH+ORG or AUTH —
+`POST /api/api-keys`, `GET /api/api-keys`,
+`POST /api/api-keys/:id/revoke` (router mounts `authMiddleware` +
+`requireOrgContext`; writes OWNER/ADMIN), `GET /api/scans/queue/stats`
+(under the scans router's `authenticateRequest` + org context), and
+`PATCH /api/auth/me` (`authMiddleware`). No new PUBLIC-DELIBERATE
+routes. The table below still lists the 92-route inventory; the 5 new
+routes are recorded here and in `docs/SECURITY_HARDENING_CHECKLIST.md`
+SEC-16 — a full table + line-number refresh is still owed. Live
+cross-tenant matrix still outstanding (needs 2 mailboxes).
 
 Every route is exactly one of:
 **AUTH+ORG** (JWT + verified org membership, queries scoped to `req.organizationId`),

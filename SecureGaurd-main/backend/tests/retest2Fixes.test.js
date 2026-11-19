@@ -139,7 +139,7 @@ test('compliance generate includes re-detected findings in range', () => {
 test('keepalive workflow pings the backend health endpoint', () => {
   const wf = fs.readFileSync(path.join(ROOT, '..', '.github', 'workflows', 'keepalive.yml'), 'utf8');
   assert.match(wf, /securegaurd\.onrender\.com\/health/);
-  assert.match(wf, /cron: '\*\/10 1-20 \* \* \*'/);
+  assert.match(wf, /cron: '3,13,23,33,43,53 1-20 \* \* \*'/);
 });
 
 // ── AI engine: model not hardcoded to a retired one; status probes ───

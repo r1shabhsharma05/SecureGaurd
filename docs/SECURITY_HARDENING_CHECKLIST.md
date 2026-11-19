@@ -65,6 +65,16 @@ PASS. Within-item progress: SEC-18 coverage 3 → 9/48 routes, SEC-17
 limiter-trip proven in-process, SEC-19/SEC-21 live re-verified. The 4
 FAILs are owner actions; Rishabh confirmed all 9 done 2026-11-19
 ~01:00 IST — gate re-verification is Day 7, not this run.
+**Day 7 (2026-11-20):** counts STILL UNCHANGED — 24 PASS / 15 PARTIAL /
+4 FAIL / 0 BLOCKED / 3 N/A, re-verified item by item at `7d471db`.
+Gate verdict: **NOT PASSED** (`docs/SECURITY_GATE_REPORT.md` rewritten
+for Day 7; database detail in `docs/DATABASE_SECURITY.md`). Within-item
+progress since 18 Nov: OAuth Google + GitHub LIVE (SEC-07 note),
+OSV 3 → 2 findings (SEC-13), routes 92 → 97 all classified (SEC-16),
+RLS coverage 54 → 63 files (SEC-31), suite 147/149. The 4 FAILs
+(SEC-03, SEC-31, SEC-32, SEC-34) were each re-probed and stand —
+all four need owner/dashboard actions, not code. Phase 4 stays
+blocked until they clear.
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -172,6 +182,11 @@ below).
   the `~/workspace/tmp-work/safelife-purge` pattern before the rewrite;
   do NOT execute a rewrite / force-push without his explicit
   confirmation.
+  **Day 7 (2026-11-20):** gitleaks full-history re-run — 210 commits,
+  same 6 false-positive findings, 0 real secrets detected; the
+  `e1e3dc9` detection gap stands (default rules still miss the known
+  leak). History intact (no rewrite has happened). Raw report:
+  `hidden_files/gitleaks-full-history-2026-11-20.json`. Stays FAIL.
 
 ### SEC-04 — Protect JWT signing secrets / database credentials
 - **Status:** PARTIAL
@@ -312,6 +327,13 @@ below).
   `utils/oauth.js`, auth-code + PKCE + HMAC state) but none is live
   (`docs/OAUTH_SSO.md` — file lives under `SecureGaurd-main/docs/`).
   Stays PARTIAL.
+  **Day 7 (2026-11-20):** OAuth is now LIVE — Google (new Cloud
+  project `securegaurd-515208`, client on Render) + GitHub (OAuth app
+  "SecureGuard", vars on Render), both set 19 Nov;
+  `GET /api/auth/oauth/providers` re-probed Day 7 → google + github.
+  Stays PARTIAL: still no MFA, no per-account lockout (IP rate limit
+  only). New adjacent gap recorded Day 7: auth events (login/logout/
+  password) are not audit-logged — see SEC-35 note + gate report.
 - **Reviewer notes:** the auth core is unusually careful for a solo project;
   the gaps are verification and MFA, not the token machinery.
 
@@ -462,6 +484,15 @@ below).
   from 17 Nov morning worked; no re-push needed. Stays PARTIAL until the
   owner risk-accepts picomatch in writing (with expiry) or upstream
   ships 4.0.8.
+  **Day 7 (2026-11-20):** OSV re-scan — 587 packages (568 on 18 Nov;
+  +19 from bullmq/ioredis), **2 findings**: minimatch@10.2.6
+  (GHSA-g3hv-75wg-m249 / CVE-2026-118764, glob DoS, fixed in 11.0.1)
+  + glob@13.0.6 (GHSA-3g3m-2fjr-6pw4 / CVE-2026-118773, fixed in
+  14.0.2). The picomatch HIGH is no longer returned by OSV for
+  4.0.7 — the package is unchanged, the advisory state changed; NOT
+  claimed as fixed, and the picomatch risk-accept ask is moot. Both
+  remaining fixes are major bumps (Day 9). Raw results:
+  `hidden_files/osv-scan-results-2026-11-20.json`. Stays PARTIAL.
 
 ---
 
@@ -559,6 +590,15 @@ below).
   definitions (42 GET, 33 POST, 7 PATCH, 7 DELETE, 1 PUT) + 2
   server-level (`GET /health`, `GET /api/_test-error`) = **92, no
   holes**. Live matrix still BLOCKED (mailbox).
+  **Day 7 (2026-11-20):** re-count DONE — 95 `router.METHOD`
+  definitions (44 GET, 34 POST, 8 PATCH, 8 DELETE, 1 PUT) + 2
+  server-level = **97, no new holes**. The 5 routes added since
+  18 Nov (api-keys create/list/revoke, scans queue/stats, auth
+  PATCH /me) are all behind auth + org context (apiKeys router
+  mounts `authMiddleware` + `requireOrgContext`, OWNER/ADMIN on
+  writes; queue/stats under the scans router's
+  `authenticateRequest`; `/me` PATCH takes `authMiddleware`).
+  Live matrix still BLOCKED (mailbox). Stays PARTIAL.
 - **Remaining risk:** medium. One unprotected route added since Oct 24
   would be a live hole. Code-level re-verification is now done; the live
   matrix is the remaining step.
@@ -942,6 +982,13 @@ below).
   called from `routes/public.js`; `routes/public.js` (AnalyticsEvent /
   ContactMessage, no RLS) and `routes/classifier.js` (0 tenant sites)
   verified as needing no change.
+  **Day 7 (2026-11-20):** coverage re-verified — 63 files, 0 bare
+  accesses (all 19 Nov batches landed inside the wrapper). Migration
+  still NOT applied, still untracked in git by design. New gap: the
+  `ApiKey` table (19 Nov) postdates the migration's 13 tables and
+  needs its own policy added before apply (expect 17 policies, not
+  16). Steps (2)–(5) still outstanding. Full rollout procedure:
+  `docs/DATABASE_SECURITY.md` §6.1. Stays FAIL.
 - **Reviewer notes:** implement Postgres RLS on Day 7, with the live
   cross-tenant matrix as the verification. The app connects with a single
   `DATABASE_URL` credential — RLS design must account for that (either a
@@ -1048,6 +1095,12 @@ below).
   forgot-password → 200; contact → **201** (new ContactMessage row id
   5). Live bundle still has 0 Turnstile references. Still FAIL — keys
   unset, guard still fail-open by design.
+  **Day 7 (2026-11-20, no signup attempted):** live bundle
+  (`assets/index-DAcJsNBs.js`) now contains the Turnstile widget code
+  (4 references; CSP allows `challenges.cloudflare.com`) but **no
+  site key** is baked in — `VITE_TURNSTILE_SITE_KEY` still unset, so
+  the guard still passes requests through. FAIL re-confirmed without
+  creating probe rows.
 - **Remaining risk:** medium — no bot protection on signup, password reset
   or contact until the key is set.
 - **Reviewer notes:** fix = Rishabh creates the Turnstile widget in
@@ -1073,6 +1126,17 @@ below).
 - **Remaining risk:** low. Coverage was not exhaustively audited per
   privileged action — a Day 7 spot-check should confirm every
   OWNER/ADMIN-only route writes a log row.
+  **Day 7 spot-check (2026-11-20):** `createAuditLog` call sites
+  grepped across routes/services — 40+ action types covering org,
+  member, repo, scan, billing, API-key, custom-rule, alert,
+  compliance, AI-fix and vulnerability changes. Not an exhaustive
+  per-route proof (no test asserts coverage). **Gap found:** auth
+  events (login, logout, password change/reset) write NO audit row;
+  `AuditLog.organizationId` is required, so the fix needs a schema
+  decision (nullable org for auth events vs primary-org resolution
+  at login) — tracked in the gate report, not silently patched.
+  Admin-action scope of this item still passes; the auth-event gap
+  is adjacent and recorded, not hidden.
 - **Reviewer notes:** none.
 
 ### SEC-36 — Loading states / empty states / clear error messages

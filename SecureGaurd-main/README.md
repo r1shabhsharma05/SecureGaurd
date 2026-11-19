@@ -226,6 +226,16 @@ Pages still took ~20 s on first load despite the keepalive workflow. Root causes
 
 Tests: backend suite 147/149 pass (same 2 pre-existing env failures), including 8 new regressions in `backend/tests/perfFixes.test.js` (cache behavior, cache-hit skips the DB lookup, malformed-id 400, pool/health/stats source pins); `rbac.test.js` clears the cache per invocation. Eslint: 0 errors in changed code.
 
+## Day 7 security gate — 20 Nov 2026
+
+Day 7 of the 20-day transformation re-verified the security gate at HEAD `7d471db`. **Verdict: GATE NOT PASSED** — checklist counts unchanged (24 PASS / 15 PARTIAL / 4 FAIL / 0 BLOCKED / 3 N/A). Full detail: `../docs/SECURITY_GATE_REPORT.md` (Day 7) and `../docs/DATABASE_SECURITY.md`.
+
+- **Database:** tenant isolation is enforced in code (63 files, 0 bare tenant-table accesses; every raw-SQL site is a parameterized Prisma tagged template, 0 Unsafe variants). Postgres RLS is written + PGlite-tested but **not applied** — it needs the superuser check on the app credential first, plus an `ApiKey` policy (the table postdates the migration). No backup has ever been taken and no restore tested; `backend/scripts/backup-db.sh` + procedure are ready (`docs/BACKUP_AND_RESTORE.md`). Auth events (login/logout/password) are not audit-logged yet — needs a schema decision (`AuditLog.organizationId` is required).
+- **Re-verified live:** OAuth Google + GitHub live, Gemini fix generation working (`gemini-3.1-flash-lite`), Razorpay test mode verified, CORS/CSP/health all green. CAPTCHA is still fail-open (widget code live, keys unset).
+- **Scans:** OSV — 587 packages, 2 findings (minimatch 10.2.6, glob 13.0.6; fixes are major bumps). Gitleaks full history — same 6 false positives, 0 real secrets detected; the known `e1e3dc9` history leak still needs the purge (owner word).
+- **Tests:** backend 147/149 (2 pre-existing env failures). One regression fixed: the keepalive cron moved to off-peak minutes in `7d471db` but `retest2Fixes.test.js` still pinned the old `*/10` literal — now pins the current cron.
+- **Phase 4 stays blocked** until the 4 FAILs (history purge, RLS apply, backup + restore, Turnstile keys) clear — all four are owner/dashboard actions with exact procedures in the gate report.
+
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.
