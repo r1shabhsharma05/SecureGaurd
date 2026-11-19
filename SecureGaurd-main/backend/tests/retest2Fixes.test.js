@@ -146,9 +146,15 @@ test('keepalive workflow pings the backend health endpoint', () => {
 
 test('Gemini model comes from GEMINI_MODEL, defaulting to a current model', () => {
   const src = readSrc('backend/utils/aiFixEngine.js');
-  assert.match(src, /process\.env\.GEMINI_MODEL \|\| 'gemini-3\.8-flash'/);
+  assert.match(src, /process\.env\.GEMINI_MODEL \|\| 'gemini-3\.1-flash-lite'/);
   assert.doesNotMatch(src, /models\/gemini-1\.5-flash:generateContent/);
   assert.doesNotMatch(src, /engine: 'gemini-1\.5-flash/);
+});
+
+test('Gemini generation retries transient 503/429 capacity errors', () => {
+  const src = readSrc('backend/utils/aiFixEngine.js');
+  assert.match(src, /response\.status !== 503 && response\.status !== 429/);
+  assert.match(src, /attempt >= 2/);
 });
 
 test('Gemini generation disables thinking and joins all text parts', () => {

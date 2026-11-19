@@ -12,8 +12,10 @@
 // (19 Nov 2026), which silently fell back to the rule engine while
 // the UI still claimed Gemini; gemini-2.5-flash is likewise closed
 // to new API keys (Google's 404 names gemini-3.8-flash as the
-// replacement). GEMINI_MODEL overrides without a push.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// replacement), and 3.8-flash 503s under demand for this key —
+// gemini-3.1-flash-lite answered in ~2 s and is the working default.
+// GEMINI_MODEL overrides without a push.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 
 // ── Rule-Based Fix Templates ──────────────────────────────────────────────────
 const FIX_RULES = {
@@ -399,29 +401,37 @@ Respond in valid JSON only (no markdown):
   "cweId": "CWE-XXX"
 }`;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  // Retry transient capacity errors (503 high demand / 429 quota) —
+  // Google sheds free-tier load with 503s that usually clear in
+  // seconds (observed 19 Nov 2026). Timeouts are not retried: a hung
+  // attempt already burned the full budget.
   let response;
-  try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: 'POST',
-        // API key as a header, never a ?key= query parameter (query strings
-        // are logged by proxies and end up in access logs).
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          // thinkingBudget 0: current Flash models think by default and
-          // blow past the request timeout on this structured-JSON task
-          // (prod 19 Nov 2026: "This operation was aborted" at 30 s).
-          generationConfig: { temperature: 0.1, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } }
-        }),
-        signal: controller.signal
-      }
-    );
-  } finally {
-    clearTimeout(timeoutId);
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    try {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+        {
+          method: 'POST',
+          // API key as a header, never a ?key= query parameter (query strings
+          // are logged by proxies and end up in access logs).
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            // thinkingBudget 0: current Flash models think by default and
+            // blow past the request timeout on this structured-JSON task
+            // (prod 19 Nov 2026: "This operation was aborted" at 30 s).
+            generationConfig: { temperature: 0.1, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } }
+          }),
+          signal: controller.signal
+        }
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (response.ok || attempt >= 2 || (response.status !== 503 && response.status !== 429)) break;
+    await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
   }
 
   if (!response.ok) {
