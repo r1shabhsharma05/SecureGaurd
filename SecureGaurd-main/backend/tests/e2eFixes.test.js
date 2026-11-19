@@ -290,3 +290,66 @@ test('dashboard TDZ: no useEffect dependency is declared after its effect', () =
     'setVulnPage(1) must appear once per filter control: severity x2, type, status, search'
   );
 });
+
+// Scan trigger — 19 Nov 2026: "Scan Now" / "Trigger Scan" did nothing in
+// the automated browser (12 clicks, 0 scans, confirm never appeared).
+// The confirm was a native window.confirm, which automated browsers
+// auto-dismiss, and the old "Scan Now" handler navigated to Overview
+// BEFORE confirming — so a dismissed confirm looked like a dead button.
+// The backend was fine: POST /api/scans/trigger with an API key queued
+// scan #S-0017, which COMPLETED (366 files, 39,979 lines, 6.09 s, 72
+// findings). Fix: the confirm is an in-page modal (scanConfirmRepo
+// state, same .modal-overlay pattern as the connect-repo modal);
+// navigation to Overview happens only after the user confirms inside it;
+// triggerScan no longer returns silently on a missing session — it
+// refreshes once, then toasts. This test pins all three halves.
+test('scan trigger: in-page confirm, no silent guard, navigate after confirm', () => {
+  const dash = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'components', 'Dashboard.tsx'),
+    'utf8'
+  );
+  // 1. No native confirm anywhere in the scan path.
+  assert.ok(
+    !/window\.confirm\(`Start a security scan/.test(dash),
+    'triggerScan must not use window.confirm — automated browsers auto-dismiss it'
+  );
+  // 2. The in-page confirm state + modal exist, and both entry points open it.
+  assert.ok(dash.includes('scanConfirmRepo'), 'scanConfirmRepo state must exist');
+  assert.ok(dash.includes('setScanConfirmRepo(r)'), '"Scan Now" must open the in-page confirm');
+  assert.ok(
+    dash.includes('setScanConfirmRepo(selectedRepo)'),
+    '"Trigger Scan" must open the in-page confirm'
+  );
+  assert.ok(dash.includes('Start security scan?'), 'the in-page scan-confirm modal must exist');
+  // 3. The "Scan Now" handler must not navigate — navigation happens in
+  // the modal's Start-scan handler, after the user confirms.
+  const scanNowIdx = dash.indexOf('<Play size={12} /> Scan Now');
+  const scanNowBlock = dash.slice(Math.max(0, scanNowIdx - 500), scanNowIdx);
+  assert.ok(
+    scanNowBlock.includes('setScanConfirmRepo(r)'),
+    '"Scan Now" must open the in-page confirm modal'
+  );
+  assert.ok(
+    !scanNowBlock.includes("setActiveNav('overview')"),
+    '"Scan Now" must not navigate before the user confirms'
+  );
+  const modalIdx = dash.indexOf('Start security scan?');
+  const modalBlock = dash.slice(modalIdx, modalIdx + 1500);
+  assert.ok(
+    modalBlock.includes("setActiveNav('overview')"),
+    'the modal confirm must navigate to Overview after confirming'
+  );
+  assert.ok(
+    modalBlock.includes('triggerScan(repo)'),
+    'the modal confirm must call triggerScan with the confirmed repo'
+  );
+  // 4. triggerScan never returns silently: a missing repo or session toasts.
+  assert.ok(
+    dash.includes("pushToast('error', 'No repository selected for the scan.')"),
+    'triggerScan must toast when no repo is selected'
+  );
+  assert.ok(
+    dash.includes('Your session expired'),
+    'triggerScan must toast when the session cannot be refreshed'
+  );
+});

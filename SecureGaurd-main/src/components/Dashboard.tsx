@@ -170,6 +170,12 @@ export default function Dashboard() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
+  // Scan confirm — native window.confirm never appears in automated
+  // browsers (auto-dismissed) and the old handler navigated to Overview
+  // BEFORE confirming, so a dismissed confirm looked like a dead button.
+  // An in-page modal renders in every browser; navigation happens only
+  // after the user confirms inside it.
+  const [scanConfirmRepo, setScanConfirmRepo] = useState<Repository | null>(null);
 
   // Profile name edit — there was no way to fix a name typed wrong at
   // signup short of a database edit (PATCH /api/auth/me is new).
@@ -619,8 +625,17 @@ export default function Dashboard() {
   // A confirm stops accidental scans (the old button fired on one click).
   const triggerScan = async (repoOverride?: Repository) => {
     const repo = repoOverride ?? selectedRepo;
-    if (scanning || !repo || !accessToken) return;
-    if (!window.confirm(`Start a security scan of ${repo.fullName}?`)) return;
+    // No silent returns: every dead end tells the user why (the old
+    // `if (scanning || !repo || !accessToken) return` hid a missing
+    // session behind a button that did nothing). Confirmation is an
+    // in-page modal now — window.confirm is auto-dismissed in automated
+    // browsers, so it never appeared there.
+    if (scanning) return;
+    if (!repo) { pushToast('error', 'No repository selected for the scan.'); return; }
+    if (!accessToken) {
+      const fresh = await refreshSession();
+      if (!fresh) { pushToast('error', 'Your session expired — please sign in again.'); return; }
+    }
     if (repoOverride) setSelectedRepo(repoOverride);
     setScanning(true);
     setScanStatusText('Starting scan…');
@@ -1104,7 +1119,7 @@ export default function Dashboard() {
             {activeNav === 'overview' && (
               <button
                 className={`scan-trigger-btn ${scanning ? 'scanning' : ''}`}
-                onClick={() => void triggerScan()}
+                onClick={() => { if (selectedRepo) setScanConfirmRepo(selectedRepo); }}
                 disabled={scanning || !selectedRepo}
               >
                 {scanning ? (
@@ -1582,8 +1597,7 @@ export default function Dashboard() {
                       disabled={scanning}
                       onClick={() => {
                         setSelectedRepo(r);
-                        setActiveNav('overview');
-                        void triggerScan(r);
+                        setScanConfirmRepo(r);
                       }}
                     >
                       <Play size={12} /> Scan Now
@@ -2329,6 +2343,41 @@ export default function Dashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Scan Confirm Modal (in-page; window.confirm is auto-dismissed
+          in automated browsers, which made the scan button look dead) ── */}
+      {scanConfirmRepo && (
+        <div className="modal-overlay" onClick={() => setScanConfirmRepo(null)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Start security scan?</h3>
+              <button className="modal-close-btn" onClick={() => setScanConfirmRepo(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>Start a security scan of <strong>{scanConfirmRepo.fullName}</strong>?</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="repo-action-btn-small" style={{ flex: 'none' }} onClick={() => setScanConfirmRepo(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="connect-repo-btn"
+                onClick={() => {
+                  const repo = scanConfirmRepo;
+                  setScanConfirmRepo(null);
+                  setActiveNav('overview');
+                  void triggerScan(repo);
+                }}
+              >
+                Start scan
+              </button>
+            </div>
           </div>
         </div>
       )}
