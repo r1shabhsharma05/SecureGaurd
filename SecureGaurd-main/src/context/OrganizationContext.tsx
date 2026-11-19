@@ -209,14 +209,19 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
   // dependency arrays without re-running effects on every render.
   const fetchMembers = useCallback(async () => {
     if (!activeOrg) return;
-    try {
-      const res = await orgFetch(`/api/organizations/${activeOrg.id}/members`);
-      if (res.ok) {
-        const data = await res.json();
-        setMembers(data);
+    // One retry: a transient backend failure used to leave the members
+    // list silently empty ("Members (0)") with no way to tell.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await orgFetch(`/api/organizations/${activeOrg.id}/members`);
+        if (res.ok) {
+          const data = await res.json();
+          setMembers(Array.isArray(data) ? data : []);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to fetch members:', err);
       }
-    } catch (err) {
-      console.error('Failed to fetch members:', err);
     }
   }, [activeOrg, orgFetch]);
 

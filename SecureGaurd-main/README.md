@@ -199,6 +199,18 @@ An afternoon re-test (HEAD `f1527bf`) confirmed the morning fixes and found the 
 
 Tests: backend suite 119/121 pass (same 2 pre-existing env failures: compliance needs live Postgres, deployment_config needs secrets), including 10 new regressions in `backend/tests/retestFixes.test.js`. Frontend build green; eslint shows only the 9 pre-existing `set-state-in-effect` errors, none in changed code.
 
+## Re-test #2 fix batch — 19 Nov 2026 (evening)
+
+An evening re-test (HEAD `ffad4fa`) verified 6 of the afternoon fixes live and found the rest. Fixed in this batch:
+
+- **AI engine label follows reality.** The Gemini model was hardcoded to `gemini-1.5-flash`, which Google retired — prod logs show `Gemini API error: 404`, so every generation silently fell back to the rule engine while `/api/ai/status` (and the UI badge) kept claiming Gemini. The model now comes from `GEMINI_MODEL` (default `gemini-2.5-flash`), and `/api/ai/status` probes the model endpoint (cached 5 min) and reports the engine that will actually run. The badge/CTA derive the Gemini version from the engine string instead of hardcoding "1.5 Flash".
+- **Compliance mapping is CWE-first.** Control mapping OR-ed type in, so nearly every finding mapped to nearly every control (CC6.1 claimed all SAST findings) and per-control evidence counts looked inconsistent. Type is now only a fallback for findings without a CWE; evidence text says "mapped to this control". Report generation also includes findings re-detected by in-range scans (`detectedInScanIds`), not just first-scan dates, and passes the requested date range to the engine (a nested `dateRange` object silently fell back to a default 30-day window).
+- **Transaction-start failures are absorbed everywhere.** P2028 "Unable to start a transaction" (free-tier pool contention) now retries inside the RLS context helpers, not just the scan worker — the transaction never began, so retrying cannot double-apply. The two RLS `set_config` calls are one statement (one less round trip per request).
+- **Performance: parallel loads, no black pages, warm backend.** The dashboard's five data loads ran sequentially (20–60 s pages); they now run in parallel with per-section failure isolation. Auth guards render a loading screen instead of a black page while the session restores. A GitHub Actions keepalive (`.github/workflows/keepalive.yml`) pings `/health` every 10 min during waking hours so Render's free tier doesn't cold-start (~18 s) on the first visitor.
+- **Small honesty fixes.** Vulnerability search matches displayed IDs (`V-0068`, `v-68`, `68`). Settings' "GitHub Integration: Not Connected" is now "GitHub Token: No token saved" with a note that public repos need no token. The members tab shows a loading state (and the fetch retries once) instead of a silent "Members (0)". The SBOM selector selects optimistically (it used to snap back while loading) and shows the SBOM name. The workspace switcher truncates less aggressively.
+
+Tests: backend suite 134/136 pass (same 2 pre-existing env failures), including 15 new regressions in `backend/tests/retest2Fixes.test.js`; `rlsContext.test.js` updated for the single-statement context set. Frontend build green; eslint shows only the 8 pre-existing `set-state-in-effect` errors, none in changed code.
+
 ## Security checklist
 
 - Backend CORS is allowlisted through `FRONTEND_URL` and `FRONTEND_URLS`; it does not accept arbitrary origins.

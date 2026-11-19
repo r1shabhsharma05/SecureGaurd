@@ -103,8 +103,9 @@ async function setOrgContext(tx, orgId, userId) {
   const user = parseContextId(userId);
   if (org === null) throw new Error('Invalid RLS context: organizationId must be a positive integer');
   if (user === null) throw new Error('Invalid RLS context: userId must be a positive integer');
-  await tx.$executeRaw`SELECT set_config('app.current_org_id', ${String(org)}, true)`;
-  await tx.$executeRaw`SELECT set_config('app.current_user_id', ${String(user)}, true)`;
+  // One statement, one round trip — every request pays this, and the
+  // database is a region away from the app server.
+  await tx.$executeRaw`SELECT set_config('app.current_org_id', ${String(org)}, true), set_config('app.current_user_id', ${String(user)}, true)`;
 }
 
 /** Set only the user variable (org discovery / org creation bootstrap). */
@@ -126,31 +127,57 @@ async function setOrgOnlyContext(tx, orgId) {
  * set. `fn` receives the transaction client — use it for every query.
  * Returns whatever `fn` returns. Rolls back on any throw (Prisma default).
  */
+/**
+ * P2028 "Unable to start a transaction in the given time" means the
+ * transaction never began — fn never ran, so retrying cannot double-apply
+ * anything. Pool contention on the free-tier database makes this a
+ * routine transient (it failed scan S-0018 and dashboard reads alike);
+ * absorb it here once instead of failing the request. Any other error —
+ * including a P2028 raised after the transaction started — propagates.
+ */
+function isTxStartError(err) {
+  return err?.code === 'P2028' && /Unable to start a transaction/i.test(err?.message || '');
+}
+
+async function runTx(client, fn) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await client.$transaction(fn, TX_OPTIONS);
+    } catch (err) {
+      lastErr = err;
+      if (!isTxStartError(err) || attempt === 2) throw err;
+      await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 function createRlsContext(client) {
   async function withOrgContext(orgId, userId, fn) {
     const org = assertContextId(orgId, 'organizationId');
     const user = assertContextId(userId, 'userId');
-    return client.$transaction(async (tx) => {
+    return runTx(client, async (tx) => {
       await setOrgContext(tx, org, user);
       return fn(tx);
-    }, TX_OPTIONS);
+    });
   }
 
   async function withUserContext(userId, fn) {
     const user = assertContextId(userId, 'userId');
-    return client.$transaction(async (tx) => {
+    return runTx(client, async (tx) => {
       await setUserContext(tx, user);
       return fn(tx);
-    }, TX_OPTIONS);
+    });
   }
 
   /** Run `fn(tx)` with only the org variable set (rule 6 — no user). */
   async function withOrgOnlyContext(orgId, fn) {
     const org = assertContextId(orgId, 'organizationId');
-    return client.$transaction(async (tx) => {
+    return runTx(client, async (tx) => {
       await setOrgOnlyContext(tx, org);
       return fn(tx);
-    }, TX_OPTIONS);
+    });
   }
 
   /** Convenience wrapper reading the ids off the request (after auth + requireOrgContext). */

@@ -266,7 +266,15 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
           {sboms.length > 1 && (
             <select
               value={selectedSbom?.id}
-              onChange={(e) => fetchSbomDetails(Number(e.target.value))}
+              onChange={(e) => {
+                const id = Number(e.target.value);
+                // Optimistic: select the list item now, then load its
+                // details. Waiting for the fetch first made the
+                // controlled select snap back ("needed two attempts").
+                const item = sboms.find(s => s.id === id);
+                if (item) setSelectedSbom(item);
+                fetchSbomDetails(id);
+              }}
               style={{
                 background: '#0f172a',
                 border: '1px solid #334155',
@@ -278,7 +286,7 @@ export default function SbomPage({ selectedRepoId }: { selectedRepoId?: number }
             >
               {sboms.map(s => (
                 <option key={s.id} value={s.id}>
-                  {s.repository?.name || s.name}{s.scan ? ` · scan #S-${String(s.scan.id).padStart(4, '0')}` : ''} ({new Date(s.createdAt).toLocaleDateString()})
+                  {s.name ? `${s.name} · ` : ''}{s.repository?.name || 'Repository'}{s.scan ? ` · scan #S-${String(s.scan.id).padStart(4, '0')}` : ''} ({new Date(s.createdAt).toLocaleDateString()})
                 </option>
               ))}
             </select>

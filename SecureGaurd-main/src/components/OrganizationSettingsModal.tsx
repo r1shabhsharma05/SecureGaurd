@@ -88,6 +88,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
   const [canceling, setCanceling] = useState(false);
 
   // Member invite form state
+  const [membersLoading, setMembersLoading] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<'OWNER' | 'ADMIN' | 'DEVELOPER' | 'AUDITOR'>('DEVELOPER');
   const [inviting, setInviting] = useState(false);
@@ -139,7 +140,8 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
     if (isOpen && activeOrg) {
       if (initialTab) setActiveTab(initialTab);
       setOrgNameInput(activeOrg.name);
-      fetchMembers();
+      setMembersLoading(true);
+      fetchMembers().finally(() => setMembersLoading(false));
       fetchBillingUsage();
       if (activeRole === 'OWNER' || activeRole === 'ADMIN') {
         fetchInvitations();
@@ -339,7 +341,7 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
             className={`tab-btn ${activeTab === 'members' ? 'active' : ''}`}
             onClick={() => setActiveTab('members')}
           >
-            Members ({members.length})
+            Members ({membersLoading ? '…' : members.length})
           </button>
 
           {canManageMembers && (
@@ -648,6 +650,12 @@ export const OrganizationSettingsModal: React.FC<Props> = ({ isOpen, onClose, in
                     </tr>
                   </thead>
                   <tbody>
+                    {membersLoading && members.length === 0 && (
+                      <tr><td colSpan={canManageMembers ? 4 : 3} style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Loading members…</td></tr>
+                    )}
+                    {!membersLoading && members.length === 0 && (
+                      <tr><td colSpan={canManageMembers ? 4 : 3} style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>No members found.</td></tr>
+                    )}
                     {members.map(m => {
                       const isSelf = m.userId === user?.id;
                       const canEditRole = isOwner || (activeRole === 'ADMIN' && m.role === 'DEVELOPER');

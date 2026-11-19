@@ -7,6 +7,12 @@
  * otherwise falls back to the high-quality built-in rule engine.
  */
 
+// The Gemini model for fix generation. Configurable because Google
+// retires models: gemini-1.5-flash started returning 404 in prod
+// (19 Nov 2026), which silently fell back to the rule engine while
+// the UI still claimed Gemini. GEMINI_MODEL overrides without a push.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+
 // ── Rule-Based Fix Templates ──────────────────────────────────────────────────
 const FIX_RULES = {
   'Potential SQL Injection': {
@@ -343,7 +349,7 @@ Respond in valid JSON only (no markdown codeblock wrapper):
       'Authorization': `Bearer ${web2apiKey}`
     },
     body: JSON.stringify({
-      model: 'gemini-1.5-flash',
+      model: GEMINI_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1
     }),
@@ -366,7 +372,7 @@ Respond in valid JSON only (no markdown codeblock wrapper):
     cweId: parsed.cweId || 'CWE-20',
     cvssScore: 7.5,
     references: [],
-    engine: 'gemini-1.5-flash (web2api proxy - 1.5M Tokens)'
+    engine: `${GEMINI_MODEL} (web2api proxy - 1.5M Tokens)`
   };
 }
 
@@ -391,19 +397,27 @@ Respond in valid JSON only (no markdown):
   "cweId": "CWE-XXX"
 }`;
 
-  const response = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
-    {
-      method: 'POST',
-      // API key as a header, never a ?key= query parameter (query strings
-      // are logged by proxies and end up in access logs).
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
-      })
-    }
-  );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  let response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        // API key as a header, never a ?key= query parameter (query strings
+        // are logged by proxies and end up in access logs).
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+        }),
+        signal: controller.signal
+      }
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
 
@@ -420,8 +434,8 @@ Respond in valid JSON only (no markdown):
     cweId: parsed.cweId || 'CWE-20',
     cvssScore: 7.0,
     references: [],
-    engine: 'gemini-1.5-flash (official API)'
+    engine: `${GEMINI_MODEL} (official API)`
   };
 }
 
-module.exports = { generateAiFix };
+module.exports = { generateAiFix, GEMINI_MODEL };

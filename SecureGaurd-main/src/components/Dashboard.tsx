@@ -435,9 +435,22 @@ export default function Dashboard() {
     if (!accessToken) return;
     setDataLoading(true);
     try {
-      // 1. Fetch repositories
-      const reposRes = await orgFetch('/api/repos');
-      if (reposRes.ok) {
+      // The five loads are independent — run them in parallel. They used
+      // to await one after another, so every dashboard load paid five
+      // sequential round trips to a far-away database (20-60 s pages).
+      // A failed request resolves to null and only its own section
+      // stays stale, instead of losing the whole load.
+      const safe = (p: Promise<Response>) => p.catch(() => null);
+      const [reposRes, statsRes, vulnsRes, scansRes, tokensRes] = await Promise.all([
+        safe(orgFetch('/api/repos')),
+        safe(orgFetch('/api/scans/stats/summary')),
+        safe(orgFetch(`/api/vulnerabilities?status=${filterStatus.toLowerCase()}&limit=200`)),
+        safe(orgFetch('/api/scans')),
+        safe(orgFetch('/api/integration/tokens')),
+      ]);
+
+      // 1. Repositories
+      if (reposRes?.ok) {
         const reposData = await reposRes.json();
         setRepos(reposData);
         if (reposData.length > 0) {
@@ -447,9 +460,8 @@ export default function Dashboard() {
         }
       }
 
-      // 2. Fetch stats
-      const statsRes = await orgFetch('/api/scans/stats/summary');
-      if (statsRes.ok) {
+      // 2. Stats
+      if (statsRes?.ok) {
         const statsData = await statsRes.json();
         setStats({
           critical: statsData.critical,
@@ -463,11 +475,10 @@ export default function Dashboard() {
         });
       }
 
-      // 3. Fetch vulnerabilities — ?status= so the list counts the same
+      // 3. Vulnerabilities — ?status= so the list counts the same
       // rows as the dashboard summary (open by default). X-Total-Count is
       // the unpaged total for pagination.
-      const vulnsRes = await orgFetch(`/api/vulnerabilities?status=${filterStatus.toLowerCase()}&limit=200`);
-      if (vulnsRes.ok) {
+      if (vulnsRes?.ok) {
         const vulnsData = await vulnsRes.json();
         setVulnTotal(Number(vulnsRes.headers.get('X-Total-Count') || vulnsData.length));
         setVulns(vulnsData);
@@ -482,16 +493,14 @@ export default function Dashboard() {
         }
       }
 
-      // 4. Fetch Scan logs
-      const scansRes = await orgFetch('/api/scans');
-      if (scansRes.ok) {
+      // 4. Scan logs
+      if (scansRes?.ok) {
         const scansData = await scansRes.json();
         setScans(scansData);
       }
 
-      // 5. Fetch integration tokens status
-      const tokensRes = await orgFetch('/api/integration/tokens');
-      if (tokensRes.ok) {
+      // 5. Integration tokens status
+      if (tokensRes?.ok) {
         const tokensData = await tokensRes.json();
         setHasGithubToken(tokensData.hasGithub);
         setHasGitlabToken(tokensData.hasGitlab);
@@ -958,7 +967,18 @@ export default function Dashboard() {
     "            -d '{ \"repository\": { \"full_name\": \"$GH_REPO\" }, \"after\": \"$GH_SHA\", \"ref\": \"refs/heads/$GH_BRANCH\" }'",
   ].join('\n');
 
-  if (!user) return null;
+  if (!user) {
+    // Session restore in flight: show a loading screen, not a black
+    // page. (The redirect effect above handles the logged-out case.)
+    return (
+      <div className="dash-root" style={{ alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', color: 'var(--text-dim)' }}>
+          <RefreshCw size={28} className="spin-icon" />
+          <span style={{ fontSize: '0.9rem' }}>Loading SecureGuard…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="dash-root">
@@ -2080,15 +2100,15 @@ export default function Dashboard() {
 
             {/* GitHub Integration */}
             <div className="settings-card">
-              <h3 className="settings-section-title">GitHub Integration</h3>
+              <h3 className="settings-section-title">GitHub Token</h3>
               <div style={{display:'flex', alignItems:'center', gap:'0.5rem', marginBottom:'0.75rem'}}>
                 <span style={{fontSize:'0.8rem', color:'var(--text-dim)'}}>Status:</span>
                 <span style={{fontSize:'0.8rem', fontWeight:700, color: hasGithubToken ? 'var(--accent-green)' : 'var(--text-dim)'}}>
-                  {hasGithubToken ? '✓ Connected' : 'Not Connected'}
+                  {hasGithubToken ? '✓ Token saved' : 'No token saved'}
                 </span>
               </div>
               <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
-                Enter a GitHub Personal Access Token (PAT) with <code>repo</code> scope to enable one-click repo import and webhook auto-scans.
+                Optional. Public repositories connect and scan without a token. Add a GitHub Personal Access Token (PAT) with <code>repo</code> scope to enable one-click import of private repositories and webhook auto-scans.
               </p>
               <div style={{display:'flex', gap:'0.5rem'}}>
                 <input
@@ -2113,15 +2133,15 @@ export default function Dashboard() {
 
             {/* GitLab Integration */}
             <div className="settings-card">
-              <h3 className="settings-section-title">GitLab Integration</h3>
+              <h3 className="settings-section-title">GitLab Token</h3>
               <div style={{display:'flex', alignItems:'center', gap:'0.5rem', marginBottom:'0.75rem'}}>
                 <span style={{fontSize:'0.8rem', color:'var(--text-dim)'}}>Status:</span>
                 <span style={{fontSize:'0.8rem', fontWeight:700, color: hasGitlabToken ? 'var(--accent-green)' : 'var(--text-dim)'}}>
-                  {hasGitlabToken ? '✓ Connected' : 'Not Connected'}
+                  {hasGitlabToken ? '✓ Token saved' : 'No token saved'}
                 </span>
               </div>
               <p style={{fontSize:'0.8rem', color:'var(--text-dim)', marginBottom:'0.75rem'}}>
-                Enter a GitLab Personal Access Token with <code>read_api</code> &amp; <code>read_repository</code> scope.
+                Optional. Public repositories connect and scan without a token. Add a GitLab Personal Access Token with <code>read_api</code> &amp; <code>read_repository</code> scope for private repositories.
               </p>
               <div style={{display:'flex', gap:'0.5rem'}}>
                 <input

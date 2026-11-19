@@ -5,6 +5,7 @@
  */
 
 export interface FilterableVuln {
+  id?: number;
   severity: string;
   type: string;
   title: string;
@@ -35,9 +36,15 @@ export function filterVulns<T extends FilterableVuln>(
       v.type.toUpperCase() === filterType ||
       (v.mlFeatures?.framework != null &&
         v.mlFeatures.framework.toUpperCase() === filterType);
+    // Search matches title/file, and the finding's displayed ID:
+    // "v-0068", "v-68", "0068" and "68" all find V-0068.
+    const idQuery = query.replace(/^v-?0*/, '');
     const matchesSearch =
       v.title.toLowerCase().includes(query) ||
-      v.filePath.toLowerCase().includes(query);
+      v.filePath.toLowerCase().includes(query) ||
+      (v.id != null &&
+        (`v-${String(v.id).padStart(4, '0')}`.includes(query) ||
+          (idQuery !== '' && String(v.id) === idQuery)));
     return matchesSev && matchesType && matchesSearch;
   });
 }

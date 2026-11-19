@@ -82,15 +82,31 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
       return res.status(400).json({ message: dateErr.message });
     }
 
+    // Findings in scope: rows first recorded by a scan in the range,
+    // PLUS rows an in-range scan re-detected (detectedInScanIds). After
+    // dedup, a finding's first scan can predate the range while an
+    // in-range scan still detected it — counting only first-scan dates
+    // dropped those findings from the report.
+    const scansInRange = await withRequestOrgContext(req, (tx) => tx.scan.findMany({
+      where: {
+        repositoryId: repo.id,
+        createdAt: { gte: fromDate, lte: toDate }
+      },
+      select: { id: true }
+    }));
+    const scanIdsInRange = scansInRange.map(s => s.id);
+
     const vulnerabilities = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
       where: {
-        scan: {
-          repositoryId: repo.id,
-          createdAt: {
-            gte: fromDate,
-            lte: toDate
+        AND: [
+          { scan: { repositoryId: repo.id } },
+          {
+            OR: [
+              { scan: { createdAt: { gte: fromDate, lte: toDate } } },
+              ...(scanIdsInRange.length > 0 ? [{ detectedInScanIds: { hasSome: scanIdsInRange } }] : [])
+            ]
           }
-        }
+        ]
       },
       orderBy: { createdAt: 'desc' }
     }));
@@ -100,7 +116,12 @@ router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async 
       vulnerabilities,
       repository: repo,
       reportName: sanitizedReportName,
-      dateRange: { fromDate, toDate, option: dateRangeOption || '30d' }
+      // Flat fields — the engine destructures fromDate/toDate/
+      // dateRangeOption directly; a nested dateRange object silently
+      // fell back to a default "last 30 days" assessment period.
+      fromDate,
+      toDate,
+      dateRangeOption: dateRangeOption || '30d'
     });
 
     const finalReportName = sanitizedReportName || `${frameworkKey} Compliance Report - ${repo.name}`;

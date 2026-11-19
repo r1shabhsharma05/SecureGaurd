@@ -43,7 +43,7 @@
 .org-name {
   font-weight: 600;
   font-size: 14px;
-  max-width: 140px;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -67,14 +67,13 @@ test('assertContextId throws on invalid ids', () => {
   assert.equal(assertContextId('7', 'organizationId'), 7);
 });
 
-test('setOrgContext issues exactly two SET LOCAL calls, org then user, parameterized', async () => {
+test('setOrgContext sets both variables in one parameterized statement', async () => {
   const tx = mockTx();
   await setOrgContext(tx, 12, 34);
-  assert.equal(tx.calls.length, 2);
+  assert.equal(tx.calls.length, 1);
   assert.match(tx.calls[0].sql, /set_config\('app\.current_org_id', \?, true\)/);
-  assert.deepEqual(tx.calls[0].params, ['12']);
-  assert.match(tx.calls[1].sql, /set_config\('app\.current_user_id', \?, true\)/);
-  assert.deepEqual(tx.calls[1].params, ['34']);
+  assert.match(tx.calls[0].sql, /set_config\('app\.current_user_id', \?, true\)/);
+  assert.deepEqual(tx.calls[0].params, ['12', '34']);
 });
 
 test('setOrgContext throws before any SQL when an id is invalid', async () => {
@@ -98,7 +97,7 @@ test('withOrgContext opens a transaction, sets context, then runs fn(tx)', async
   const out = await withOrgContext(9, 3, async (t) => { seenTx = t; return 'ok'; });
   assert.equal(out, 'ok');
   assert.equal(seenTx, tx);
-  assert.equal(tx.calls.length, 2); // context set before fn ran (fn adds no calls here)
+  assert.equal(tx.calls.length, 1); // context set (one statement) before fn ran
 });
 
 test('withOrgContext rejects invalid ids without opening a transaction', async () => {

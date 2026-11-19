@@ -7,7 +7,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 // short context (the handlers interleave external AI calls between
 // the read and the write, so one transaction is wrong).
 const { withRequestOrgContext } = require('../utils/rlsContext');
-const { generateAiFix } = require('../utils/aiFixEngine');
+const { generateAiFix, GEMINI_MODEL } = require('../utils/aiFixEngine');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -159,11 +159,37 @@ router.patch('/false-positive/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
   }
 });
 
-// GET /api/ai/status — Check if Gemini API is configured
+// GET /api/ai/status — the engine that will ACTUALLY generate a fix.
+// A configured key is not enough: when Google retired
+// gemini-1.5-flash the API started returning 404, generation silently
+// fell back to the rule engine, and this endpoint kept claiming
+// Gemini — the UI label lied. Probe the model endpoint (cached 5 min)
+// so the reported engine follows reality.
+let geminiProbeCache = { at: 0, ok: false };
+async function geminiAvailable() {
+  if (!process.env.GEMINI_API_KEY) return false;
+  if (Date.now() - geminiProbeCache.at < 5 * 60 * 1000) return geminiProbeCache.ok;
+  let ok = false;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`, {
+      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    ok = res.ok;
+  } catch { ok = false; }
+  geminiProbeCache = { at: Date.now(), ok };
+  return ok;
+}
+
 router.get('/status', async (req, res) => {
+  const available = await geminiAvailable();
   res.json({
-    engine: process.env.GEMINI_API_KEY ? 'gemini-1.5-flash' : 'rule-based',
+    engine: available ? GEMINI_MODEL : 'rule-based',
     geminiConfigured: !!process.env.GEMINI_API_KEY,
+    geminiAvailable: available,
     capabilities: ['fix-generation', 'false-positive-detection', 'cvss-scoring', 'cwe-mapping']
   });
 });

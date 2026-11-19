@@ -447,6 +447,8 @@
   font-size: 0.75rem;
   color: var(--text-dim);
   margin-top: 1px;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .vuln-filters {

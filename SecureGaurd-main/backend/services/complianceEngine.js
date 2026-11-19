@@ -286,18 +286,18 @@ function evaluateCompliance({ framework, vulnerabilities = [], repository, repor
   let notAssessedControls = 0;
 
   const evaluatedControls = controlsConfig.map(ctrl => {
-    // Find matching vulnerabilities for this control based on CWE or vulnerability type
-    const mapped = openVulns.filter(v => {
+    // Map by CWE first — it is the precise signal. Type is only a
+    // fallback for findings that carry no CWE: OR-ing type in mapped
+    // nearly every finding to nearly every control (CC6.1 claimed all
+    // SAST findings, SQLi included), which made the per-control counts
+    // meaningless and the report look internally inconsistent.
+    const mapsToControl = (v) => {
       const cweMatch = v.cweId && ctrl.cweMatches.some(c => v.cweId.toUpperCase().includes(c.toUpperCase()));
-      const typeMatch = v.type && ctrl.types.includes(v.type.toLowerCase());
-      return cweMatch || typeMatch;
-    });
-
-    const mappedResolved = fixedOrIgnoredVulns.filter(v => {
-      const cweMatch = v.cweId && ctrl.cweMatches.some(c => v.cweId.toUpperCase().includes(c.toUpperCase()));
-      const typeMatch = v.type && ctrl.types.includes(v.type.toLowerCase());
-      return cweMatch || typeMatch;
-    });
+      if (cweMatch) return true;
+      return !v.cweId && v.type && ctrl.types.includes(v.type.toLowerCase());
+    };
+    const mapped = openVulns.filter(mapsToControl);
+    const mappedResolved = fixedOrIgnoredVulns.filter(mapsToControl);
 
     const critMapped = mapped.filter(v => (v.severity || '').toLowerCase() === 'critical').length;
     const highMapped = mapped.filter(v => (v.severity || '').toLowerCase() === 'high').length;
@@ -312,17 +312,17 @@ function evaluateCompliance({ framework, vulnerabilities = [], repository, repor
       status = 'FAIL';
       severity = critMapped > 0 ? 'CRITICAL' : 'HIGH';
       failedControls++;
-      evidence = `FAILED: Detected ${critMapped} Critical and ${highMapped} High severity open vulnerability finding(s) violating this control standard.`;
+      evidence = `FAILED: Detected ${critMapped} Critical and ${highMapped} High severity open finding(s) mapped to this control.`;
     } else if (highMapped === 1 || medMapped >= 2) {
       status = 'PARTIAL';
       severity = highMapped === 1 ? 'HIGH' : 'MEDIUM';
       partialControls++;
-      evidence = `PARTIALLY SATISFIED: Detected ${highMapped} High and ${medMapped} Medium severity open vulnerability finding(s) requiring remediation.`;
+      evidence = `PARTIALLY SATISFIED: Detected ${highMapped} High and ${medMapped} Medium severity open finding(s) mapped to this control, requiring remediation.`;
     } else if (medMapped === 1 || lowMapped > 0) {
       status = 'PARTIAL';
       severity = medMapped === 1 ? 'MEDIUM' : 'LOW';
       partialControls++;
-      evidence = `PARTIALLY SATISFIED: ${medMapped > 0 ? medMapped + ' Medium and ' : ''}${lowMapped} Low severity open finding(s) detected.`;
+      evidence = `PARTIALLY SATISFIED: ${medMapped > 0 ? medMapped + ' Medium and ' : ''}${lowMapped} Low severity open finding(s) mapped to this control.`;
     } else {
       status = 'PASS';
       severity = 'NONE';

@@ -109,11 +109,18 @@ function ResetPasswordRouteHandler() {
 
 // SEC-44 — /onboarding had no logged-out guard: an anonymous user could
 // open the wizard (its API calls still required auth, so this is a UX
-// hole, not a data hole). While the session restore is in flight, render
-// nothing rather than flashing the wizard or bouncing a real user.
+// hole, not a data hole). While the session restore is in flight, show
+// a loading screen rather than flashing the wizard, bouncing a real
+// user, or rendering a black page.
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0f172a', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.95rem' }}>
+        Loading SecureGuard…
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
