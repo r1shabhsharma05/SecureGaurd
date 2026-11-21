@@ -37,6 +37,7 @@ CREATE TABLE "Subscription" (id serial PRIMARY KEY, "organizationId" integer NOT
 CREATE TABLE "AlertSetting" (id serial PRIMARY KEY, "organizationId" integer NOT NULL);
 CREATE TABLE "AlertLog" (id serial PRIMARY KEY, "organizationId" integer NOT NULL);
 CREATE TABLE "CustomRule" (id serial PRIMARY KEY, "organizationId" integer NOT NULL);
+CREATE TABLE "ApiKey" (id serial PRIMARY KEY, "organizationId" integer NOT NULL, "userId" integer NOT NULL, "keyHash" text UNIQUE);
 CREATE TABLE "Repository" (id serial PRIMARY KEY, "organizationId" integer, "userId" integer, "fullName" text, platform text);
 CREATE TABLE "Scan" (id serial PRIMARY KEY, "organizationId" integer, "userId" integer, "repositoryId" integer);
 CREATE TABLE "ComplianceReport" (id serial PRIMARY KEY, "organizationId" integer, "userId" integer, "repositoryId" integer);
@@ -119,14 +120,14 @@ test.beforeEach((t) => {
   if (!db) t.skip('migration file not committed yet — held back until SEC-31 conversion completes');
 });
 
-test('migration self-check: 16 policies on 13 tables', async () => {
+test('migration self-check: 17 policies on 14 tables', async () => {
   const rows = await db.query(`SELECT count(*)::int AS n, count(DISTINCT tablename)::int AS t
     FROM pg_policies WHERE schemaname = 'public' AND tablename IN (
       'Organization', 'OrganizationMembership', 'OrganizationInvitation',
       'AuditLog', 'Subscription', 'AlertSetting', 'AlertLog', 'CustomRule',
-      'Repository', 'Scan', 'ComplianceReport', 'Sbom', 'Vulnerability')`);
-  assert.equal(rows.rows[0].n, 16);
-  assert.equal(rows.rows[0].t, 13);
+      'ApiKey', 'Repository', 'Scan', 'ComplianceReport', 'Sbom', 'Vulnerability')`);
+  assert.equal(rows.rows[0].n, 17);
+  assert.equal(rows.rows[0].t, 14);
 });
 
 test('same-org reads return rows; cross-org reads return 0', async () => {

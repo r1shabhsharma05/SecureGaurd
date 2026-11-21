@@ -55,31 +55,59 @@ origin. No probe accounts created.
 ### SEC-03 — Secrets in git history (FAIL)
 Commit `e1e3dc9` (2026-04-16) committed `backend/.env` with a real
 `JWT_SECRET` (rotated 2026-11-08) and a dev MongoDB credential
-(`glanexus_admin`). Forks check done (0 forks). Still open: owner
-confirms the current Render `JWT_SECRET` differs from the committed
-value, deletes the Atlas user `glanexus_admin`, and gives the word
-for the history rewrite (`git filter-repo` + force-push). Gitleaks
-does not detect this leak with default rules — a green scan is not
-evidence of a clean history. Procedure: `docs/SECRETS_AND_INFRASTRUCTURE.md` §2.
+(`glanexus_admin`). Forks check done (0 forks).
+**Day 8 evidence (2026-11-21):** Render dashboard read-only check —
+current `JWT_SECRET` on the SecureGaurd service exists and is
+**128 characters**; the leaked value in `e1e3dc9` is 38 characters.
+The current secret therefore differs from the leaked one — rotation
+is confirmed (length only; the value was never printed). Atlas
+check attempted the same night: saved login accepted, then blocked
+at Authenticator App MFA — console not reached, `glanexus_admin`
+existence still unknown, nothing deleted. Still open: owner
+completes Atlas MFA (or deletes `glanexus_admin` himself), and gives
+the word for the history rewrite (`git filter-repo` + force-push).
+Gitleaks does not detect this leak with default rules — a green scan
+is not evidence of a clean history. Procedure:
+`docs/SECRETS_AND_INFRASTRUCTURE.md` §2.
 
 ### SEC-31 — No Postgres RLS enforcement (FAIL)
-Migration written + PGlite-validated (16 policies, 13 tables, FORCE
-RLS, fail-closed); call-site conversion complete (63 files, 0 bare
-accesses). Still open: (1) superuser check on the app credential —
-if `postgres`, create `secureguard_app` role + repoint `DATABASE_URL`;
-(2) add an `ApiKey` policy (table added 19 Nov, postdates the
-migration); (3) backfill check; (4) apply via SQL Editor (expect 17
-policies after ApiKey); (5) push the migration folder + live matrix.
+Migration written + PGlite-validated (17 policies, 14 tables incl.
+`ApiKey`, FORCE RLS, fail-closed); call-site conversion complete
+(63 files, 0 bare accesses); `rlsMigration.test.js` 12/12 green
+(re-run 2026-11-21).
+**Day 8 evidence (2026-11-21, Supabase SQL Editor, read-only):**
+step 1 done — app credential is `postgres` with `usesuper=false`
+but **`usebypassrls=true`**, so RLS would still be bypassed;
+`secureguard_app` role does not exist. Render `DATABASE_URL`
+username confirmed as `postgres.wkvvxqlflhjiqkhwxrsl` (pooler).
+`pg_policies` count = 0 (nothing applied yet). Step 3 done —
+backfill check: every tenant table with an `organizationId` column
+has **0 NULL-org rows** (Repository, Scan, Sbom, ComplianceReport,
+ApiKey, CustomRule, AlertLog, AuditLog, Subscription all 0;
+`Vulnerability` has no `organizationId` column — scoped via Scan).
+Still open: (1b) create `secureguard_app` role (LOGIN, no
+superuser, **no bypassrls**, DML grants) + repoint Render
+`DATABASE_URL` + redeploy + re-run step 1; (4) apply via SQL Editor
+(expect 17 policies); (5) push the migration folder + live matrix.
 Full procedure: `docs/DATABASE_SECURITY.md` §6.1. The scans
 export-feedback operator path 503s under RLS (no service-role path)
-— design decision still owed before apply.
+— design decision still owed before apply. The role creation +
+repoint is a production change — not done unattended.
 
 ### SEC-32 — No DB backups ever (FAIL)
-No backup taken, no restore tested, Supabase PITR unverified
-(Management API 403 for this project with the connected token).
+No backup taken, no restore tested.
+**Day 8 evidence (2026-11-21, Supabase dashboard):** PITR check
+done — the project is on the **FREE plan, which includes no
+backups at all** ("Free Plan does not include project backups";
+project overview: "LAST BACKUP: No backups"). PITR is a Pro Plan
+add-on starting at $100/month; Pro itself is $25/month and includes
+7 days of scheduled backups. So there is no dashboard backup to
+verify — the only no-cost route is the scripted `pg_dump` backup.
 Script + procedure ready (`backup-db.sh`, `BACKUP_AND_RESTORE.md`).
-Owner step: dashboard PITR check → scripted backup on a host with
-`pg_dump` + `DATABASE_URL` → restore into a disposable DB + row-count
+Owner step (pick one): (a) upgrade to Pro ($25/mo, his money call)
+→ scheduled backups exist → restore test; or (b) run `backup-db.sh`
+on a host with `pg_dump` + `DATABASE_URL` (Render shell or laptop —
+this VM has neither) → restore into a disposable DB + row-count
 spot checks. Procedure: `docs/DATABASE_SECURITY.md` §6.2.
 
 ### SEC-34 — CAPTCHA fail-open (FAIL)
@@ -156,17 +184,21 @@ fail-closed before the keys exist (repeats the Nov 8 outage).
 
 ## Decisions needed from the owner (pruned — 19 Nov completions removed)
 
-1. **History purge (SEC-03):** approve the rewrite? Confirm the
-   current Render `JWT_SECRET` differs from the committed value;
-   delete Atlas user `glanexus_admin` first.
+1. **History purge (SEC-03):** approve the rewrite? JWT rotation
+   confirmed Day 8 (128 vs 38 chars). Delete Atlas user
+   `glanexus_admin` first — needs his Authenticator App code (MFA
+   blocked the unattended check on 21 Nov).
 2. **Turnstile keys (SEC-34):** create the widget + set the two keys
    (Render `TURNSTILE_SECRET_KEY`, Vercel `VITE_TURNSTILE_SITE_KEY`).
-3. **Backups (SEC-32):** dashboard PITR check + scripted backup +
-   trial restore (`DATABASE_SECURITY.md` §6.2).
-4. **RLS (SEC-31):** superuser check → (role switch if needed) →
-   ApiKey policy → backfill → apply → push migration → live matrix
-   (`DATABASE_SECURITY.md` §6.1). Includes the export-feedback
-   operator-path decision.
+3. **Backups (SEC-32):** PITR check done Day 8 — Free plan has no
+   backups. Pick: Pro upgrade ($25/mo) or scripted `pg_dump` backup
+   + trial restore (`DATABASE_SECURITY.md` §6.2).
+4. **RLS (SEC-31):** superuser check done Day 8 (`postgres`,
+   bypassrls=true → role switch required); ApiKey policy done;
+   backfill done (0 NULL-org rows). Remaining: create
+   `secureguard_app` role → repoint `DATABASE_URL` → apply → push
+   migration → live matrix (`DATABASE_SECURITY.md` §6.1). Includes
+   the export-feedback operator-path decision.
 5. **Retention (SEC-33):** amend the AuditLog trigger with a
    retention carve-out, or accept indefinite AuditLog retention.
 6. **Deletions (SEC-06):** approve deleting `classifier model/files/`;
@@ -179,7 +211,10 @@ fail-closed before the keys exist (repeats the Nov 8 outage).
 9. **Razorpay LIVE billing** (not a gate item, still blocked):
    finish business type + KYC; test mode is verified working.
 
-**Until items 1–4 clear, Phase 4 does not start.** The next scheduled
-run (Day 8, 21 Nov) must re-check the gate first; if it still fails,
-Day 8 work is limited to gate-clearing support (procedures, scripts,
-tests) — no new product features.
+**Until items 1–4 clear, Phase 4 does not start.** Day 8 (21 Nov)
+re-checked the gate: still NOT PASSED (24/15/4/3) — no item crossed
+to PASS, none regressed. Day 8 work was gate-clearing support only
+(evidence above; backend suite 147/149, same 2 env failures; live
+probes 200). Day 9 (22 Nov) must re-check the gate first; if it
+still fails, Day 9 work stays limited to gate-clearing support — no
+new product features.
