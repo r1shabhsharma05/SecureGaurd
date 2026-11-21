@@ -75,6 +75,13 @@ RLS coverage 54 → 63 files (SEC-31), suite 147/149. The 4 FAILs
 (SEC-03, SEC-31, SEC-32, SEC-34) were each re-probed and stand —
 all four need owner/dashboard actions, not code. Phase 4 stays
 blocked until they clear.
+**Day 9 (2026-11-22):** counts STILL UNCHANGED — 24 PASS / 15 PARTIAL /
+4 FAIL / 0 BLOCKED / 3 N/A at `af650fa`. Gate verdict: **NOT PASSED**
+(Day 9 section in `docs/SECURITY_GATE_REPORT.md`). Within-item: OSV
+2 → 3 findings (new effect advisory, SEC-13 note below); SEC-31
+role-switch pack prepared (`docs/SEC31_ROLE_SWITCH.md`, not applied);
+suite 147/149, RLS test 12/12, coverage 63/0. Phase 4 (Days 8–9)
+has not started — gate rule. The 4 FAILs still need owner actions.
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -493,6 +500,13 @@ below).
   claimed as fixed, and the picomatch risk-accept ask is moot. Both
   remaining fixes are major bumps (Day 9). Raw results:
   `hidden_files/osv-scan-results-2026-11-20.json`. Stays PARTIAL.
+  **Day 9 (2026-11-22):** OSV re-scan — 587 packages, **3 findings**:
+  the same minimatch + glob, plus **new** effect@3.20.0
+  (GHSA-7589-6fvf-x4pw / CVE-2026-121707, fixed in 3.22.1, backend
+  lockfile). Package unchanged — new advisory published against it;
+  NOT claimed fixed. Day 9 dependency remediation did not run: the
+  security gate still fails, so Phase 4 stays blocked. Raw results:
+  `hidden_files/osv-scan-results-2026-11-22.json`. Stays PARTIAL.
 
 ---
 

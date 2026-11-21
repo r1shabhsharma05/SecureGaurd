@@ -195,8 +195,9 @@ fail-closed before the keys exist (repeats the Nov 8 outage).
    + trial restore (`DATABASE_SECURITY.md` §6.2).
 4. **RLS (SEC-31):** superuser check done Day 8 (`postgres`,
    bypassrls=true → role switch required); ApiKey policy done;
-   backfill done (0 NULL-org rows). Remaining: create
-   `secureguard_app` role → repoint `DATABASE_URL` → apply → push
+   backfill done (0 NULL-org rows); role-switch pack prepared Day 9
+   (`docs/SEC31_ROLE_SWITCH.md`, not applied). Remaining: supervised
+   role creation → repoint `DATABASE_URL` → verify → apply → push
    migration → live matrix (`DATABASE_SECURITY.md` §6.1). Includes
    the export-feedback operator-path decision.
 5. **Retention (SEC-33):** amend the AuditLog trigger with a
@@ -215,6 +216,43 @@ fail-closed before the keys exist (repeats the Nov 8 outage).
 re-checked the gate: still NOT PASSED (24/15/4/3) — no item crossed
 to PASS, none regressed. Day 8 work was gate-clearing support only
 (evidence above; backend suite 147/149, same 2 env failures; live
-probes 200). Day 9 (22 Nov) must re-check the gate first; if it
-still fails, Day 9 work stays limited to gate-clearing support — no
-new product features.
+probes 200). The Day 8 evidence update landed as `af650fa`
+(2026-11-21).
+
+## Day 9 re-check (2026-11-22) — still NOT PASSED
+
+Gate re-checked first, per the rule. Counts unchanged:
+**24 PASS / 15 PARTIAL / 4 FAIL / 0 BLOCKED / 3 N/A**. No item
+crossed to PASS, none regressed. Phase 4 (Day 9 dependency /
+supply-chain features) therefore did **not** start; Day 9 work was
+gate-clearing support only:
+
+- **SEC-31 role-switch pack prepared:** `docs/SEC31_ROLE_SWITCH.md`
+  — exact supervised-apply procedure for step 1b (create
+  `secureguard_app` with `NOBYPASSRLS`, DML + sequence + function
+  grants, default privileges, pooler `DATABASE_URL` repoint,
+  verify queries, rollback, migration ownership split). **Not
+  applied** — production credential change needs the owner present.
+- **SEC-13 OSV re-scan (Day 9):** 587 packages, **3 findings** (was
+  2 on Day 7): minimatch@10.2.6 (GHSA-g3hv-75wg-m249, fixed 11.0.1),
+  glob@13.0.6 (GHSA-3g3m-2fjr-6pw4, fixed 14.0.2), and **new**
+  effect@3.20.0 (GHSA-7589-6fvf-x4pw / CVE-2026-121707, fixed
+  3.22.1, backend lockfile). The package did not change — a new
+  advisory was published against it. Not claimed fixed; SEC-13
+  stays PARTIAL. Raw: `osv-scan-results-2026-11-22.json` (kept out
+  of the repo, program hidden files).
+- **Local verification (HEAD `af650fa`):** `rlsMigration.test.js`
+  12/12 green; RLS coverage 63 files / 0 bare accesses; full backend
+  suite **147/149** (same 2 pre-existing env failures: compliance
+  needs live Postgres, deployment_config needs real secrets).
+- **Live probes (read-only):** frontend 200 (1.3s); backend
+  `/health` 200 `db: "up"`; classifier `/health` ok
+  `model_loaded: true` after a 60s cold-start timeout on the first
+  probe (Render free tier sleeping — second probe answered).
+
+Still blocked on the owner (unchanged): Atlas MFA code + history-
+rewrite word (SEC-03), Turnstile widget + keys (SEC-34), backup
+route pick (SEC-32), supervised role switch + export-feedback
+decision (SEC-31), 2 mailboxes for the live matrix. Day 10 (23 Nov)
+must re-check the gate first; if it still fails, Day 10 work stays
+limited to gate-clearing support — no new product features.
