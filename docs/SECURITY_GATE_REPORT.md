@@ -89,6 +89,11 @@ Still open: (1b) create `secureguard_app` role (LOGIN, no
 superuser, **no bypassrls**, DML grants) + repoint Render
 `DATABASE_URL` + redeploy + re-run step 1; (4) apply via SQL Editor
 (expect 17 policies); (5) push the migration folder + live matrix.
+**Superseded 2026-11-22/23:** step 1b was executed (fix-forward
+after a zero-policy outage) — `secureguard_app` is live with
+NOBYPASSRLS and 20 permissive policies; the 17 tenant policies are
+still NOT applied. See the Day 10 re-check section below for the
+verified live state. SEC-31 remains FAIL.
 Full procedure: `docs/DATABASE_SECURITY.md` §6.1. The scans
 export-feedback operator path 503s under RLS (no service-role path)
 — design decision still owed before apply. The role creation +
@@ -256,3 +261,60 @@ route pick (SEC-32), supervised role switch + export-feedback
 decision (SEC-31), 2 mailboxes for the live matrix. Day 10 (23 Nov)
 must re-check the gate first; if it still fails, Day 10 work stays
 limited to gate-clearing support — no new product features.
+
+## Day 10 re-check (2026-11-23) — still NOT PASSED (one item crossed)
+
+Gate re-checked first, per the rule. Counts changed for the first
+time: **25 PASS / 14 PARTIAL / 4 FAIL / 0 BLOCKED / 3 N/A** at
+`93d710d`. SEC-13 crossed to PASS; nothing regressed. The 4 FAILs
+stand, so Phase 4 (Day 10 ML/AI intelligence) did **not** start;
+Day 10 work was gate-clearing support only:
+
+- **SEC-13 → PASS:** the 3 OSV findings fixed via npm `overrides`
+  (commit `93d710d`): minimatch 11.0.9, glob 14.0.6, effect 3.22.5 —
+  verified in both lockfiles. OSV re-scan: **589 packages, 0
+  vulnerable** (raw: `osv-scan-results-2026-11-23.json`, program
+  hidden files). CI `dependency-scan.yml` already live.
+- **SEC-18 gap shrank:** shared validation wired into 13 route files
+  — **39 `validateBody` + 2 `validateQuery`** call sites; **19 of 51**
+  mutating routes still use inline checks (ai.js 3, auth.js 4 incl.
+  verify-email/OAuth, organizations.js 4, billingWebhook 1
+  signature-verified, invitations 1, 6 singletons). Stays PARTIAL.
+- **Auth audit logging (decision 8) closed in code:** `logAuthEvent`
+  in `middleware/rbac.js` resolves the user's primary org and writes
+  login/logout/password events to AuditLog; never throws into the
+  auth handler. Covered by the RBAC/validation test files.
+- **SEC-31 live state re-verified (Supabase SQL Editor, read-only,
+  2026-11-23):** the 22 Nov role-switch fix-forward is real —
+  `secureguard_app` exists (LOGIN, NOSUPERUSER, **NOBYPASSRLS**);
+  `postgres` still bypasses RLS (rolbypassrls=true) but is no longer
+  the app credential. `pg_policies` = **20**, all named
+  `app_full_access`, role `{secureguard_app}`, cmd ALL, **qual =
+  true (permissive)** — **0 tenant-scoped policies**. All 20 public
+  tables: RLS enabled, **not forced**. So the database now enforces
+  "app role only", but tenant isolation still relies entirely on
+  application-level filtering. **SEC-31 stays FAIL** until the
+  17-policy tenant migration replaces the permissive policies
+  (Step E — still needs his decisions: backup-first or not, extra
+  tables, export-feedback 503 design).
+- **SEC-06 partially cleared:** `backend/generated/prisma/` (33
+  files) deleted in `1204d5a` (22 Nov, browser web-UI). The stale
+  `classifier model/files/` copy still needs owner approval —
+  SEC-06 stays PARTIAL.
+- **Local verification (HEAD `93d710d`):** full backend suite
+  **160/162** (same 2 pre-existing env failures; count grew from
+  149 with the new validation tests); RLS coverage 63 files / 0
+  bare; frontend build green.
+- **Live probes (read-only, post-push):** frontend 200; backend
+  `/health` 200 `db: "up"`; classifier ok `model_loaded: true`
+  (after cold start); bad-body login → 400 with field errors (no
+  regression from the validation wiring).
+
+Still blocked on the owner: Atlas MFA code + history-rewrite word
+(SEC-03), Turnstile widget + keys (SEC-34), backup route pick
+(SEC-32), SEC-31 Step E decisions (tenant-policy migration with or
+without backup first, extra tables, export-feedback design),
+classifier-copy deletion approval (SEC-06), 2 mailboxes for the
+live matrix. Day 11 (24 Nov) must re-check the gate first; if it
+still fails, Day 11 work stays limited to gate-clearing support —
+no new product features.

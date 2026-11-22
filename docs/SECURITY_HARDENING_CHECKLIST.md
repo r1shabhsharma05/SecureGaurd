@@ -38,8 +38,8 @@ document.
 
 | Status | Count |
 |---|---|
-| PASS | 24 |
-| PARTIAL | 15 |
+| PASS | 25 |
+| PARTIAL | 14 |
 | FAIL | 4 |
 | BLOCKED | 0 |
 | NOT APPLICABLE | 3 |
@@ -47,7 +47,8 @@ document.
 
 FAIL items (must clear before the Day 7 gate): SEC-03 (secrets in git
 history — purge procedure ready, needs the owner's word), SEC-31 (Row Level
-Security — migration written, not applied), SEC-32 (database backups —
+Security — app role live with 20 permissive policies since 22 Nov, tenant
+policies still not applied), SEC-32 (database backups —
 never taken), SEC-34 (CAPTCHA fail-open — keys unset, re-confirmed live
 2026-11-16). Fixed by the fix-all run: SEC-09 (email verification is a
 real gate now), SEC-37 (fake scan progress removed), SEC-19 (CSP live on
@@ -82,6 +83,17 @@ blocked until they clear.
 role-switch pack prepared (`docs/SEC31_ROLE_SWITCH.md`, not applied);
 suite 147/149, RLS test 12/12, coverage 63/0. Phase 4 (Days 8–9)
 has not started — gate rule. The 4 FAILs still need owner actions.
+**Day 10 (2026-11-23):** counts CHANGED — **25 PASS / 14 PARTIAL /
+4 FAIL / 0 BLOCKED / 3 N/A** at `93d710d`. SEC-13 crossed to PASS
+(3 findings fixed via overrides, OSV 0/589 — see SEC-13 note).
+SEC-18 gap shrank (39 `validateBody` sites; 19/51 mutating routes
+still inline — stays PARTIAL). Auth events now audit-logged
+(`logAuthEvent`, primary-org resolution — gate decision 8 closed in
+code). Suite 160/162 (same 2 env failures), frontend build green,
+production probes 200. Gate verdict: still **NOT PASSED** — the 4
+FAILs (SEC-03, SEC-31, SEC-32, SEC-34) stand; Phase 4 (Day 10
+ML/AI) has not started — gate rule. See the Day 10 section in
+`docs/SECURITY_GATE_REPORT.md`.
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -433,7 +445,8 @@ below).
 - **Reviewer notes:** none.
 
 ### SEC-13 — Update dependencies / dependency vulnerability scanning
-- **Status:** PARTIAL (measured; fixes not applied, CI first run pending)
+- **Status:** PASS (Day 10, 2026-11-23 — 0 OSV findings across 589
+  packages; CI scan live; see Day 10 note below)
 - **Sources:** screenshots 03, 07
 - **Files inspected:** `package.json`, `backend/package.json`
   (dependency lists + outdated counts)
@@ -507,6 +520,17 @@ below).
   NOT claimed fixed. Day 9 dependency remediation did not run: the
   security gate still fails, so Phase 4 stays blocked. Raw results:
   `hidden_files/osv-scan-results-2026-11-22.json`. Stays PARTIAL.
+  **Day 10 (2026-11-23):** all 3 findings FIXED via npm `overrides`
+  (commit `93d710d`): minimatch → 11.0.9 (fix 11.0.1), glob → 14.0.6
+  (fix 14.0.2), effect → 3.22.5 (fix 3.22.1) — verified in both
+  lockfiles. OSV re-scan: **589 packages, 0 vulnerable** (raw:
+  `hidden_files/osv-scan-results-2026-11-23.json`). Backend suite
+  160/162 (same 2 pre-existing env failures), frontend build green,
+  production probes 200 after push. Automated scanning is in place
+  (CI `dependency-scan.yml` live + `scripts/osv-scan.mjs`). **Status
+  → PASS** (no known vulnerabilities at scan time; outdated majors
+  remain but are not vulnerabilities). New advisories can appear any
+  day — re-scan is part of every gate re-check.
 
 ---
 
@@ -706,6 +730,17 @@ below).
   3 → **9 of 48** mutating routes. Deliberately not wired: verify-email
   (query-or-body token), OAuth callback (redirect flow), no-body routes.
   See `docs/BACKEND_SECURITY.md`.
+  **Day 10 (2026-11-23, commit `93d710d`):** shared validation wired
+  into the remaining route files (alerts, apiKeys, billing, compliance,
+  customRules, integration, ml, organizations, public, repos, scans,
+  vulnerabilities + `patchMeSchema` on auth). Measured on the pushed
+  tree: **39 `validateBody` + 2 `validateQuery` call sites** across 13
+  route files; **19 of 51 mutating routes** still rely on inline checks
+  (ai.js 3, auth.js 4 incl. verify-email/OAuth flows, organizations.js
+  4, billingWebhook 1 signature-verified, invitations 1, + 6 singletons).
+  Validation + RBAC + RLS-migration tests 47/47; full backend suite
+  160/162 (same 2 env failures). Stays PARTIAL — gap is now consistency
+  on 19 routes, not absence; no route is unvalidated.
 - **Reviewer notes:** do not confuse the scanner's `sanitizerPatterns.json`
   (AST feature detection) with input sanitization — different thing.
 
@@ -1003,6 +1038,16 @@ below).
   needs its own policy added before apply (expect 17 policies, not
   16). Steps (2)–(5) still outstanding. Full rollout procedure:
   `docs/DATABASE_SECURITY.md` §6.1. Stays FAIL.
+  **Day 10 (2026-11-23):** rollout step (2) is DONE and live-verified
+  (Supabase SQL Editor, read-only): `secureguard_app` exists (LOGIN,
+  NOSUPERUSER, NOBYPASSRLS) and is the app credential after the
+  22 Nov fix-forward. `pg_policies` = 20, all `app_full_access`
+  (role `{secureguard_app}`, ALL, qual=true — permissive); **0
+  tenant-scoped policies**; all 20 public tables RLS-enabled, none
+  FORCEd. The 17-policy tenant migration is still NOT applied —
+  tenant isolation remains application-level only. Stays FAIL until
+  Step E (tenant policies + live matrix) completes; Step E needs
+  owner decisions (backup-first, extra tables, export-feedback).
 - **Reviewer notes:** implement Postgres RLS on Day 7, with the live
   cross-tenant matrix as the verification. The app connects with a single
   `DATABASE_URL` credential — RLS design must account for that (either a
