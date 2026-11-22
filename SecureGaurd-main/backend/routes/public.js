@@ -17,7 +17,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole } = require('../middleware/rbac');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
-const { validateBody, contactSchema } = require('../utils/validation');
+const { validateBody, contactSchema, analyticsEventSchema } = require('../utils/validation');
 const { parseSummaryRange, buildAnalyticsSummary } = require('../utils/analyticsSummary');
 const {
   isAllowedAnalyticsEvent,
@@ -52,7 +52,7 @@ const contactLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-router.post('/analytics/events', analyticsLimiter, async (req, res) => {
+router.post('/analytics/events', analyticsLimiter, validateBody(analyticsEventSchema), async (req, res) => {
   const { event, path, sessionId, props } = req.body || {};
   if (!isAllowedAnalyticsEvent(event)) {
     return res.status(400).json({ message: 'Unknown analytics event.' });

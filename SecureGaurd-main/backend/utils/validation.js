@@ -126,6 +126,149 @@ const deleteAccountSchema = z.object({
   confirmation: z.literal('DELETE'),
 });
 
+// Authenticated mutating routes (SEC-18 / SEC-22 completion). Every schema
+// below is a looseObject: the declared fields are type-checked at the
+// boundary, unknown fields pass through untouched, and each handler keeps
+// its existing business checks (enums with role logic, URL formats, date
+// math) as the second layer. Bounds mirror the inline checks they front —
+// wiring these in changes no accepted input, only where wrong-shaped
+// input is rejected. Optional fields are nullish where the handler
+// already tolerates null.
+const vulnStatusSchema = z.looseObject({
+  status: z.enum(['open', 'fixed', 'ignored', 'false_positive']),
+});
+
+const vulnLabelSchema = z.looseObject({
+  label: z.enum(['real', 'false_positive']),
+});
+
+// Billing (POST /api/billing/create-subscription). getPlanConfig stays
+// the authority on which plan keys are purchasable.
+const createSubscriptionSchema = z.looseObject({
+  plan: z.string().min(1, 'Plan is required.'),
+});
+
+// API keys (POST /api/api-keys). The handler keeps the name regex, scope
+// filtering and future-date check.
+const createApiKeySchema = z.looseObject({
+  name: z.string().min(1, 'Name is required.'),
+  scopes: z.array(z.string()).optional(),
+  expiresAt: z.string().nullish(),
+});
+
+// Alerts (PUT /api/alerts/settings, POST /api/alerts/test).
+const alertSettingsSchema = z.looseObject({
+  slackWebhookUrl: z.string().nullish(),
+  slackEnabled: z.boolean().optional(),
+  emailEnabled: z.boolean().optional(),
+  notifyOnScanComplete: z.boolean().optional(),
+  notifyOnNewCritical: z.boolean().optional(),
+});
+
+const alertTestSchema = z.looseObject({
+  channel: z.enum(['slack', 'email']),
+});
+
+// Compliance (POST /api/compliance/generate). The handler keeps framework
+// normalisation and date-range parsing.
+const complianceGenerateSchema = z.looseObject({
+  repositoryId: zIntId,
+  framework: z.string().nullish(),
+  dateRangeOption: z.string().nullish(),
+  customFromDate: z.string().nullish(),
+  customToDate: z.string().nullish(),
+  reportName: z.string().nullish(),
+});
+
+// Repositories (POST /api/repos). The handler keeps the name/URL format
+// checks and the reachability probe.
+const createRepoSchema = z.looseObject({
+  name: z.string().min(1, 'name and url are required'),
+  url: z.string().min(1, 'name and url are required'),
+  fullName: z.string().nullish(),
+  platform: z.string().nullish(),
+  language: z.string().nullish(),
+});
+
+// Organizations (create / rename share the name rule; member role;
+// transfer ownership; invite).
+const orgNameSchema = z.looseObject({
+  name: z.string().trim().min(2, 'Organization name must be at least 2 characters'),
+});
+
+const memberRoleSchema = z.looseObject({
+  role: z.enum(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']),
+});
+
+const transferOwnershipSchema = z.looseObject({
+  memberId: zIntId,
+});
+
+const inviteMemberSchema = z.looseObject({
+  email: zEmail,
+  role: z.string().nullish(),
+});
+
+// Custom rules (create / patch / test / test-scan). YAML parsing and the
+// 200 KB code cap stay in the handlers; these prove the shape.
+const customRuleCreateSchema = z.looseObject({
+  yaml: z.string().min(1, 'yaml is required.'),
+});
+
+const customRulePatchSchema = z.looseObject({
+  yaml: z.string().nullish(),
+  enabled: z.boolean().optional(),
+});
+
+const customRuleTestSchema = z.looseObject({
+  code: z.string().min(1, 'code must be a non-empty string under 200 KB').max(200000, 'code must be a non-empty string under 200 KB'),
+  filePath: z.string().nullish(),
+});
+
+const customRuleTestScanSchema = z.looseObject({
+  scanId: zIntId,
+});
+
+// Integrations (POST /api/integration/tokens, POST /api/integration/pr-bot).
+const integrationTokensSchema = z.looseObject({
+  githubToken: z.string().nullish(),
+  gitlabToken: z.string().nullish(),
+});
+
+const prBotSchema = z.looseObject({
+  repositoryId: zIntId,
+  commitSha: z.string().regex(/^[0-9a-f]{40}$/i, 'commitSha must be a 40-character hex SHA'),
+  prNumber: zIntId,
+});
+
+// ML ranker (POST /api/ml/rank). The handler keeps its integer filter.
+const mlRankSchema = z.looseObject({
+  vulnerabilityIds: z.array(z.unknown()).min(1, 'vulnerabilityIds must be a non-empty array (max 100)').max(100, 'vulnerabilityIds must be a non-empty array (max 100)'),
+});
+
+// API-spec scan (POST /api/scans/api-spec). The handler keeps the
+// exactly-one-of rule and the byte-size check.
+const apiSpecSchema = z.looseObject({
+  specUrl: z.string().max(2048, 'Invalid specUrl.').nullish(),
+  specContent: z.string().min(1, 'specContent must be a non-empty string under 2 MB.').nullish(),
+  fileName: z.string().nullish(),
+});
+
+// Profile update (PATCH /api/auth/me). The handler keeps its name regex.
+const patchMeSchema = z.looseObject({
+  firstName: z.string().nullish(),
+  lastName: z.string().nullish(),
+});
+
+// Public analytics (POST /api/analytics/events). The handler keeps the
+// event allowlist and props sanitiser.
+const analyticsEventSchema = z.looseObject({
+  event: z.string().min(1, 'Unknown analytics event.'),
+  path: z.string().min(1, 'A valid page path is required.').max(500, 'A valid page path is required.'),
+  sessionId: z.string().nullish(),
+  props: z.unknown().optional(),
+});
+
 // Middleware -----------------------------------------------------------------
 
 // Formats zod issues into the API's existing { message } error shape, plus
@@ -192,6 +335,28 @@ module.exports = {
   emailOnlySchema,
   resetPasswordSchema,
   deleteAccountSchema,
+  vulnStatusSchema,
+  vulnLabelSchema,
+  createSubscriptionSchema,
+  createApiKeySchema,
+  alertSettingsSchema,
+  alertTestSchema,
+  complianceGenerateSchema,
+  createRepoSchema,
+  orgNameSchema,
+  memberRoleSchema,
+  transferOwnershipSchema,
+  inviteMemberSchema,
+  customRuleCreateSchema,
+  customRulePatchSchema,
+  customRuleTestSchema,
+  customRuleTestScanSchema,
+  integrationTokensSchema,
+  prBotSchema,
+  mlRankSchema,
+  apiSpecSchema,
+  patchMeSchema,
+  analyticsEventSchema,
   validateBody,
   validateQuery,
 };

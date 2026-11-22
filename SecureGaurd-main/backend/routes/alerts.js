@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, alertSettingsSchema, alertTestSchema } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -52,7 +53,7 @@ router.get('/settings', async (req, res) => {
 
 // PUT /api/alerts/settings — OWNER/ADMIN only. A Slack URL is accepted
 // only for hooks.slack.com/services/*; anything else is a 400, never stored.
-router.put('/settings', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.put('/settings', requireOrgRole(['OWNER', 'ADMIN']), validateBody(alertSettingsSchema), async (req, res) => {
   const { slackWebhookUrl, slackEnabled, emailEnabled, notifyOnScanComplete, notifyOnNewCritical } = req.body || {};
   const bool = (v, d) => (typeof v === 'boolean' ? v : d);
   try {
@@ -95,7 +96,7 @@ router.put('/settings', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => 
 // returns the provider's actual outcome. A missing webhook, an unconfigured
 // mail transport, or a provider rejection is reported as failure, never
 // as a success.
-router.post('/test', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.post('/test', requireOrgRole(['OWNER', 'ADMIN']), validateBody(alertTestSchema), async (req, res) => {
   const { channel } = req.body || {};
   if (channel !== 'slack' && channel !== 'email') {
     return res.status(400).json({ message: 'channel must be "slack" or "email"' });

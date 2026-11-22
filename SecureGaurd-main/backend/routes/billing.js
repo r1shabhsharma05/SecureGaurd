@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, createSubscriptionSchema } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -41,7 +42,7 @@ router.get('/usage', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVEL
  * abandoned authorization can never leave a paid plan behind.
  * Allowed for: OWNER only
  */
-router.post('/create-subscription', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
+router.post('/create-subscription', requireOrgContext, requireOrgRole(['OWNER']), validateBody(createSubscriptionSchema), async (req, res) => {
   try {
     const { plan } = req.body; // 'PRO' | 'ENTERPRISE'
     const targetPlan = getPlanConfig(plan);

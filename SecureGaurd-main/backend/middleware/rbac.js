@@ -180,10 +180,38 @@ async function createAuditLog(organizationId, actorId, action, targetType = null
   }
 }
 
+/**
+ * Audit-log an auth event (login, logout, password change/reset).
+ *
+ * AuditLog.organizationId is required, but auth events happen outside
+ * any org context. Resolution: the user's primary (earliest)
+ * membership's org — the same default-org rule requireOrgContext
+ * uses. A user with no membership yet (pre-onboarding) has no org to
+ * attach the row to, so the event is skipped. Never throws into the
+ * auth handler: an audit failure must not break sign-in.
+ */
+async function logAuthEvent(userId, action, details = null) {
+  try {
+    const uid = parseInt(userId, 10);
+    if (!uid || Number.isNaN(uid)) return;
+    const membership = await withUserContext(uid, (tx) =>
+      tx.organizationMembership.findFirst({
+        where: { userId: uid },
+        orderBy: { createdAt: 'asc' },
+        select: { organizationId: true },
+      }));
+    if (!membership) return;
+    await createAuditLog(membership.organizationId, uid, action, 'USER', String(uid), details || {});
+  } catch (err) {
+    console.error('Auth Audit Log Error:', err);
+  }
+}
+
 module.exports = {
   requireOrgContext,
   requireOrgRole,
   createAuditLog,
+  logAuthEvent,
   // Test hook + mutation invalidation: membership changes clear the
   // whole cache so a removed/demoted member loses access immediately.
   clearMembershipCache: () => membershipCache.clear(),

@@ -11,6 +11,28 @@ const {
   zPagination,
   contactSchema,
   scanTriggerSchema,
+  vulnStatusSchema,
+  vulnLabelSchema,
+  createSubscriptionSchema,
+  createApiKeySchema,
+  alertSettingsSchema,
+  alertTestSchema,
+  complianceGenerateSchema,
+  createRepoSchema,
+  orgNameSchema,
+  memberRoleSchema,
+  transferOwnershipSchema,
+  inviteMemberSchema,
+  customRuleCreateSchema,
+  customRulePatchSchema,
+  customRuleTestSchema,
+  customRuleTestScanSchema,
+  integrationTokensSchema,
+  prBotSchema,
+  mlRankSchema,
+  apiSpecSchema,
+  patchMeSchema,
+  analyticsEventSchema,
   validateBody,
   validateQuery,
 } = require('../utils/validation');
@@ -134,4 +156,91 @@ test('validateQuery works through a real Express 5 app (getter-only req.query)',
   } finally {
     server.close();
   }
+});
+
+// ── Authenticated-route schemas (SEC-18 / SEC-22 completion) ─────────────────
+// Each schema is a looseObject: declared fields are type-checked, unknown
+// fields pass through (handlers keep their business checks as layer two).
+// These tests pin: valid input accepted unchanged, wrong-shaped input
+// rejected, unknown fields preserved.
+
+test('vuln status/label schemas accept only the handler enums', () => {
+  assert.equal(vulnStatusSchema.safeParse({ status: 'fixed' }).success, true);
+  assert.equal(vulnStatusSchema.safeParse({ status: 'bogus' }).success, false);
+  assert.equal(vulnStatusSchema.safeParse({}).success, false);
+  assert.equal(vulnLabelSchema.safeParse({ label: 'real' }).success, true);
+  assert.equal(vulnLabelSchema.safeParse({ label: 'maybe' }).success, false);
+});
+
+test('looseObject schemas pass unknown fields through untouched', () => {
+  const parsed = vulnStatusSchema.parse({ status: 'open', futureField: 42 });
+  assert.equal(parsed.futureField, 42);
+});
+
+test('billing/api-key schemas prove shape, handlers keep policy', () => {
+  assert.equal(createSubscriptionSchema.safeParse({ plan: 'PRO' }).success, true);
+  assert.equal(createSubscriptionSchema.safeParse({}).success, false);
+  assert.equal(createApiKeySchema.safeParse({ name: 'ci-key', scopes: ['read'], expiresAt: null }).success, true);
+  assert.equal(createApiKeySchema.safeParse({ name: 'x', scopes: 'read' }).success, false);
+  assert.equal(createApiKeySchema.safeParse({ scopes: [] }).success, false);
+});
+
+test('alert schemas: settings all-optional, test channel is an enum', () => {
+  assert.equal(alertSettingsSchema.safeParse({}).success, true);
+  assert.equal(alertSettingsSchema.safeParse({ slackEnabled: true, slackWebhookUrl: null }).success, true);
+  assert.equal(alertSettingsSchema.safeParse({ slackEnabled: 'yes' }).success, false);
+  assert.equal(alertTestSchema.safeParse({ channel: 'email' }).success, true);
+  assert.equal(alertTestSchema.safeParse({ channel: 'sms' }).success, false);
+});
+
+test('compliance/repo schemas require their ids and strings', () => {
+  assert.equal(complianceGenerateSchema.safeParse({ repositoryId: '25' }).success, true);
+  assert.equal(complianceGenerateSchema.safeParse({ repositoryId: 'x' }).success, false);
+  assert.equal(createRepoSchema.safeParse({ name: 'r', url: 'https://github.com/a/b' }).success, true);
+  assert.equal(createRepoSchema.safeParse({ name: 'r' }).success, false);
+});
+
+test('organization schemas: name floor, role enum, member id, invite email', () => {
+  assert.equal(orgNameSchema.safeParse({ name: 'Acme' }).success, true);
+  assert.equal(orgNameSchema.safeParse({ name: ' A ' }).success, false);
+  assert.equal(memberRoleSchema.safeParse({ role: 'AUDITOR' }).success, true);
+  assert.equal(memberRoleSchema.safeParse({ role: 'SUPERUSER' }).success, false);
+  assert.equal(transferOwnershipSchema.safeParse({ memberId: '9' }).success, true);
+  assert.equal(transferOwnershipSchema.safeParse({ memberId: 'x' }).success, false);
+  assert.equal(inviteMemberSchema.safeParse({ email: 'a@b.com', role: 'ADMIN' }).success, true);
+  assert.equal(inviteMemberSchema.safeParse({ email: 'not-an-email' }).success, false);
+});
+
+test('custom rule schemas: yaml required on create, code capped on test', () => {
+  assert.equal(customRuleCreateSchema.safeParse({ yaml: 'id: x' }).success, true);
+  assert.equal(customRuleCreateSchema.safeParse({}).success, false);
+  assert.equal(customRulePatchSchema.safeParse({ enabled: false }).success, true);
+  assert.equal(customRulePatchSchema.safeParse({ yaml: null }).success, true);
+  assert.equal(customRuleTestSchema.safeParse({ code: 'x'.repeat(200001) }).success, false);
+  assert.equal(customRuleTestScanSchema.safeParse({ scanId: 3 }).success, true);
+});
+
+test('integration/ml/api-spec/profile/analytics schemas', () => {
+  assert.equal(integrationTokensSchema.safeParse({ githubToken: 'ghp_x' }).success, true);
+  assert.equal(integrationTokensSchema.safeParse({ githubToken: 42 }).success, false);
+  assert.equal(prBotSchema.safeParse({ repositoryId: 1, commitSha: 'a'.repeat(40), prNumber: 7 }).success, true);
+  assert.equal(prBotSchema.safeParse({ repositoryId: 1, commitSha: 'short', prNumber: 7 }).success, false);
+  assert.equal(mlRankSchema.safeParse({ vulnerabilityIds: [1, 2] }).success, true);
+  assert.equal(mlRankSchema.safeParse({ vulnerabilityIds: [] }).success, false);
+  assert.equal(apiSpecSchema.safeParse({ specContent: 'openapi: 3.0.0' }).success, true);
+  assert.equal(apiSpecSchema.safeParse({ specUrl: 'https://x.test/s.yaml' }).success, true);
+  assert.equal(patchMeSchema.safeParse({ firstName: 'Rishabh' }).success, true);
+  assert.equal(patchMeSchema.safeParse({ firstName: 42 }).success, false);
+  assert.equal(analyticsEventSchema.safeParse({ event: 'page_view', path: '/home' }).success, true);
+  assert.equal(analyticsEventSchema.safeParse({ event: 'page_view', path: 'x'.repeat(501) }).success, false);
+});
+
+test('validateBody with a route schema 400s bad input and passes good input through', () => {
+  const bad = runMiddleware(validateBody(vulnStatusSchema), { body: { status: 'nope' } });
+  assert.equal(bad.res.statusCode, 400);
+  assert.equal(bad.nextCalled, false);
+  const req = { body: { status: 'ignored', extra: 'kept' } };
+  const good = runMiddleware(validateBody(vulnStatusSchema), req);
+  assert.equal(good.nextCalled, true);
+  assert.equal(req.body.extra, 'kept');
 });

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, customRuleCreateSchema, customRulePatchSchema, customRuleTestSchema, customRuleTestScanSchema } = require('../utils/validation');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const { Worker } = require('worker_threads');
@@ -176,7 +177,7 @@ function ruleDataFromParsed(parsed, organizationId, createdById) {
 }
 
 // POST /api/custom-rules — create from YAML. OWNER/ADMIN/DEVELOPER only.
-router.post('/', requireOrgRole(WRITE_ROLES), async (req, res) => {
+router.post('/', requireOrgRole(WRITE_ROLES), validateBody(customRuleCreateSchema), async (req, res) => {
   const { yaml: yamlText } = req.body || {};
   let parsed;
   try {
@@ -206,7 +207,7 @@ router.post('/', requireOrgRole(WRITE_ROLES), async (req, res) => {
 
 // PATCH /api/custom-rules/:id — full replace from YAML, or {enabled} toggle.
 // A YAML replace must carry the same id as the stored rule (ids are immutable).
-router.patch('/:id', requireOrgRole(WRITE_ROLES), async (req, res) => {
+router.patch('/:id', requireOrgRole(WRITE_ROLES), validateBody(customRulePatchSchema), async (req, res) => {
   try {
     const row = await loadRule(req, res);
     if (!row) return;
@@ -260,7 +261,7 @@ router.delete('/:id', requireOrgRole(WRITE_ROLES), async (req, res) => {
 // runs in a worker thread with a timeout (see testRuleInWorker), so a
 // pathological stored pattern cannot block the main event loop. Body:
 // { code: string, filePath?: string }.
-router.post('/:id/test', customRuleTestLimiter, requireOrgRole(WRITE_ROLES), async (req, res) => {
+router.post('/:id/test', customRuleTestLimiter, requireOrgRole(WRITE_ROLES), validateBody(customRuleTestSchema), async (req, res) => {
   try {
     const row = await loadRule(req, res);
     if (!row) return;
@@ -290,7 +291,7 @@ router.post('/:id/test', customRuleTestLimiter, requireOrgRole(WRITE_ROLES), asy
 // as it exists NOW (a past scan's frozen tree is not stored) with ONLY this
 // rule enabled, so the match list proves the rule fires in the real engine.
 // Body: { scanId: number }.
-router.post('/:id/test-scan', requireOrgRole(WRITE_ROLES), async (req, res) => {
+router.post('/:id/test-scan', requireOrgRole(WRITE_ROLES), validateBody(customRuleTestScanSchema), async (req, res) => {
   let scanTarget = null;
   try {
     const row = await loadRule(req, res);

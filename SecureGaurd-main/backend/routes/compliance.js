@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, complianceGenerateSchema } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -42,7 +43,7 @@ function parseDateRange(dateRangeOption, customFrom, customTo) {
 
 // POST /api/compliance/generate — Generate a new compliance report for active organization
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only; auditors read via GET /reports).
-router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.post('/generate', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(complianceGenerateSchema), async (req, res) => {
   try {
     const { repositoryId, framework, dateRangeOption, customFromDate, customToDate, reportName } = req.body;
 

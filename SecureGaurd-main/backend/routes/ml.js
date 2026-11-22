@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, mlRankSchema } = require('../utils/validation');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext } = require('../middleware/rbac');
 const prisma = require('../prismaClient');
@@ -58,7 +59,7 @@ async function fetchMl(path, options = {}) {
 // Body: { vulnerabilityIds: number[] } (1..100). Returns the ranked list
 // (highest priority first). Findings without stored mlFeatures cannot be
 // scored and are omitted; the frontend keeps them in default order.
-router.post('/rank', authMiddleware, requireOrgContext, async (req, res) => {
+router.post('/rank', authMiddleware, requireOrgContext, validateBody(mlRankSchema), async (req, res) => {
   const { vulnerabilityIds } = req.body || {};
   if (!Array.isArray(vulnerabilityIds) || vulnerabilityIds.length === 0 || vulnerabilityIds.length > 100) {
     return res.status(400).json({ message: 'vulnerabilityIds must be a non-empty array (max 100)' });

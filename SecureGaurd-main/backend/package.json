@@ -12,6 +12,10 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "overrides": {
+    "glob": "^14.0.2",
+    "effect": "^3.22.1"
+  },
   "dependencies": {
     "@babel/parser": "^8.0.10",
     "@babel/traverse": "^8.0.10",

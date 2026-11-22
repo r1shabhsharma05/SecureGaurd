@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, integrationTokensSchema, prBotSchema } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -385,7 +386,7 @@ router.get('/tokens', async (req, res) => {
 });
 
 // POST /api/integration/tokens
-router.post('/tokens', async (req, res) => {
+router.post('/tokens', validateBody(integrationTokensSchema), async (req, res) => {
   const { githubToken, gitlabToken } = req.body;
   try {
     const tokenUpdates = {};
@@ -479,7 +480,7 @@ router.get('/repos', async (req, res) => {
 // A repo with no scan yet posts a check noting that honestly instead of
 // claiming a clean bill of health.
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
-router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.post('/pr-bot', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(prBotSchema), async (req, res) => {
   const { repositoryId, commitSha, prNumber } = req.body;
   if (!repositoryId || !commitSha || prNumber === undefined || prNumber === null || prNumber === '') {
     return res.status(400).json({ message: 'repositoryId, commitSha and prNumber are required' });

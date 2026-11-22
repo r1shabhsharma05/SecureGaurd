@@ -5,6 +5,7 @@
 // revoke responses never carry it (only the hash is stored).
 const express = require('express');
 const router = express.Router();
+const { validateBody, createApiKeySchema } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -23,7 +24,7 @@ const PUBLIC_FIELDS = {
 };
 
 // POST /api/api-keys — create a key, returned once with the secret.
-router.post('/', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.post('/', requireOrgRole(['OWNER', 'ADMIN']), validateBody(createApiKeySchema), async (req, res) => {
   const { name, scopes, expiresAt } = req.body || {};
   if (typeof name !== 'string' || !KEY_NAME_RE.test(name.trim())) {
     return res.status(400).json({ message: 'Name must be 1-50 characters (letters, digits, space, _ or -).' });

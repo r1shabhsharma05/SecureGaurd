@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, createRepoSchema } = require('../utils/validation');
 const { execFile } = require('child_process');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
@@ -67,7 +68,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/repos — add a new repository to the organization
-router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(createRepoSchema), async (req, res) => {
   const { name, fullName, url, platform, language } = req.body;
   if (!name || !url || typeof name !== 'string' || typeof url !== 'string') return res.status(400).json({ message: 'name and url are required' });
 

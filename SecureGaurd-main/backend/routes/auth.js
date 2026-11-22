@@ -7,7 +7,7 @@ const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { sendMail, isMailConfigured } = require('../utils/mailer');
 const { requireTurnstile } = require('../utils/turnstile');
-const { z, zPassword, validateBody, registerSchema, loginSchema, emailOnlySchema, resetPasswordSchema, deleteAccountSchema } = require('../utils/validation');
+const { z, zPassword, validateBody, registerSchema, loginSchema, emailOnlySchema, resetPasswordSchema, deleteAccountSchema, patchMeSchema } = require('../utils/validation');
 const { planAccountDeletion } = require('../utils/accountDeletion');
 const { cancelOrgProviderSubscription } = require('./organizations');
 // SEC-31: the account-deletion path touches RLS tables only (memberships,
@@ -18,6 +18,7 @@ const { cancelOrgProviderSubscription } = require('./organizations');
 // mid-transaction). All other handlers in this file touch User only
 // (no RLS) and are untouched.
 const { withUserContext, withOrgContext, setOrgContext } = require('../utils/rlsContext');
+const { logAuthEvent } = require('../middleware/rbac');
 const {
   providerConfig,
   isProviderConfigured,
@@ -312,7 +313,10 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req, res) =
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
+    if (!isMatch) {
+      await logAuthEvent(user.id, 'USER_LOGIN_FAILED', { method: 'password' });
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
 
     // SEC-09 — unverified accounts (created after the gate shipped) get
     // no session. Legacy accounts without a pending token are grandfathered
@@ -331,6 +335,7 @@ router.post('/login', authLimiter, validateBody(loginSchema), async (req, res) =
     await prisma.user.update({ where: { id: user.id }, data: { refreshToken: hashedRefresh } });
 
     setRefreshCookie(res, refreshToken);
+    await logAuthEvent(user.id, 'USER_LOGIN', { method: 'password' });
 
     res.json({
       accessToken,
@@ -455,6 +460,7 @@ router.post('/logout', async (req, res) => {
       const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
       // Invalidate stored refresh token and any in-grace superseded token
       await prisma.user.update({ where: { id: decoded.id }, data: { refreshToken: null, previousRefreshToken: null, refreshGraceExpiresAt: null } });
+      await logAuthEvent(decoded.id, 'USER_LOGOUT', {});
     } catch { /* already expired */ }
   }
   clearRefreshCookie(res);
@@ -546,6 +552,7 @@ router.post('/reset-password', resetLimiter, validateBody(resetPasswordSchema), 
       },
     });
 
+    await logAuthEvent(user.id, 'PASSWORD_RESET', {});
     clearRefreshCookie(res);
     res.json({ message: 'Password reset successfully. Please login with your new password.' });
   } catch (err) {
@@ -585,6 +592,7 @@ router.post('/change-password', authLimiter, authMiddleware, validateBody(change
         refreshGraceExpiresAt: null,
       },
     });
+    await logAuthEvent(user.id, 'PASSWORD_CHANGED', {});
     clearRefreshCookie(res);
     res.json({ message: 'Password changed successfully. Please sign in again with your new password.' });
   } catch (err) {
@@ -640,7 +648,7 @@ router.get('/me', meLimiter, async (req, res) => {
 // typed wrong at signup short of a DB edit). Own account only; the email
 // itself is never changed here. OAuth logins must not overwrite the
 // corrected name — the callback only fills a name when the row has none.
-router.patch('/me', authMiddleware, async (req, res) => {
+router.patch('/me', authMiddleware, validateBody(patchMeSchema), async (req, res) => {
   const { firstName, lastName } = req.body || {};
   const clean = (v) => (typeof v === 'string' ? v.trim() : '');
   const first = clean(firstName);
@@ -791,6 +799,7 @@ router.get('/oauth/:provider/callback', oauthCallbackLimiter, async (req, res) =
     const hashedRefresh = await bcrypt.hash(refreshToken, 10);
     await prisma.user.update({ where: { id: user.id }, data: { refreshToken: hashedRefresh } });
     setRefreshCookie(res, refreshToken);
+    await logAuthEvent(user.id, 'USER_LOGIN', { method: `oauth:${provider}` });
     clearOauthCookies(res);
     return res.redirect(`${frontendBaseUrl()}/oauth/callback`);
   } catch (err) {

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { validateBody, orgNameSchema, memberRoleSchema, transferOwnershipSchema, inviteMemberSchema } = require('../utils/validation');
 const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
@@ -104,7 +105,7 @@ router.get('/', async (req, res) => {
 });
 
 // ── POST /api/organizations — Create new organization ────────────────────────
-router.post('/', async (req, res) => {
+router.post('/', validateBody(orgNameSchema), async (req, res) => {
   const { name } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     return res.status(400).json({ message: 'Organization name must be at least 2 characters' });
@@ -218,7 +219,7 @@ router.get('/:organizationId', requireOrgContext, async (req, res) => {
 });
 
 // ── PATCH /api/organizations/:id — Update organization name ─────────────────
-router.patch('/:organizationId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.patch('/:organizationId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), validateBody(orgNameSchema), async (req, res) => {
   const { name } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     return res.status(400).json({ message: 'Organization name must be at least 2 characters' });
@@ -298,7 +299,7 @@ router.get('/:organizationId/members', requireOrgContext, async (req, res) => {
 });
 
 // ── PATCH /api/organizations/:id/members/:memberId — Update member role ────
-router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), validateBody(memberRoleSchema), async (req, res) => {
   const targetMemberId = parseInt(req.params.memberId);
   const { role } = req.body;
 
@@ -539,7 +540,7 @@ router.post('/:organizationId/leave', requireOrgContext, async (req, res) => {
 });
 
 // ── POST /api/organizations/:id/transfer-ownership — OWNER only ─────────────
-router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrgRole(['OWNER']), async (req, res) => {
+router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrgRole(['OWNER']), validateBody(transferOwnershipSchema), async (req, res) => {
   const targetMemberId = parseInt(req.body?.memberId);
   if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
 
@@ -616,7 +617,7 @@ router.post('/:organizationId/transfer-ownership', requireOrgContext, requireOrg
 });
 
 // ── POST /api/organizations/:id/invitations — Invite member ─────────────────
-router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
+router.post('/:organizationId/invitations', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), validateBody(inviteMemberSchema), async (req, res) => {
   const { email, role } = req.body;
   if (!email || typeof email !== 'string' || !email.includes('@')) {
     return res.status(400).json({ message: 'Valid email address is required' });

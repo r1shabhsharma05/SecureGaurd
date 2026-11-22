@@ -46,7 +46,7 @@ require.cache[orgMigrationPath] = {
   },
 };
 
-const { requireOrgContext, requireOrgRole, createAuditLog, clearMembershipCache } = require('../middleware/rbac');
+const { requireOrgContext, requireOrgRole, createAuditLog, logAuthEvent, clearMembershipCache } = require('../middleware/rbac');
 
 const MEMBER = {
   organizationId: 12,
@@ -209,5 +209,43 @@ test('createAuditLog without actorId skips the write (no RLS context can be set)
   reset();
   await createAuditLog(12, null, 'REPO_ADDED');
   assert.equal(calls.transactions, 0);
+  assert.equal(calls.auditCreate.length, 0);
+});
+
+// ── logAuthEvent (auth audit logging, Day 7 finding) ─────────────────────────
+// AuditLog.organizationId is required; auth events resolve the user's
+// primary (earliest) membership org. No membership → skip. Never throws.
+
+test('logAuthEvent writes the event against the primary org', async () => {
+  reset();
+  findFirstImpl = async () => ({ organizationId: 12 });
+  await logAuthEvent(7, 'USER_LOGIN', { method: 'password' });
+  assert.equal(calls.auditCreate.length, 1);
+  assert.equal(calls.auditCreate[0].data.organizationId, 12);
+  assert.equal(calls.auditCreate[0].data.actorId, 7);
+  assert.equal(calls.auditCreate[0].data.action, 'USER_LOGIN');
+  assert.equal(calls.auditCreate[0].data.targetType, 'USER');
+  assert.equal(calls.auditCreate[0].data.targetId, '7');
+  assert.deepEqual(calls.auditCreate[0].data.details, { method: 'password' });
+});
+
+test('logAuthEvent skips the write when the user has no membership yet', async () => {
+  reset();
+  findFirstImpl = async () => null;
+  await logAuthEvent(7, 'USER_LOGIN', {});
+  assert.equal(calls.auditCreate.length, 0);
+});
+
+test('logAuthEvent never throws when the membership lookup fails', async () => {
+  reset();
+  findFirstImpl = async () => { throw new Error('db down'); };
+  await logAuthEvent(7, 'USER_LOGIN', {});
+  assert.equal(calls.auditCreate.length, 0);
+});
+
+test('logAuthEvent ignores a non-numeric user id', async () => {
+  reset();
+  await logAuthEvent('abc', 'USER_LOGIN', {});
+  assert.equal(calls.findFirst.length, 0);
   assert.equal(calls.auditCreate.length, 0);
 });

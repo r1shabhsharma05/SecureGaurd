@@ -10,7 +10,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { checkCanTriggerScan } = require('../services/billingService');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
 const { scanAPISpecFile } = require('../utils/apiSpecScanner');
-const { validateBody, validateQuery, scanTriggerSchema, zPagination } = require('../utils/validation');
+const { validateBody, validateQuery, scanTriggerSchema, apiSpecSchema, zPagination } = require('../utils/validation');
 const { enqueueScan, getQueueStats } = require('../queues/scanQueue');
 const cache = require('../utils/cache');
 // SEC-31: Scan/Vulnerability/Sbom/CustomRule/Repository are RLS tables.
@@ -278,7 +278,7 @@ router.post('/trigger', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'D
 // CWE, mlFeatures.isApi); the repo-scan path is what persists findings and
 // classifier-passes them (IaC/API findings are forced REAL there, never
 // suppressed by the SAST-trained model).
-router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
+router.post('/api-spec', scanTriggerLimiter, requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(apiSpecSchema), async (req, res) => {
   try {
     const { specUrl, specContent, fileName } = req.body || {};
     if ((specUrl && specContent) || (!specUrl && !specContent)) {
