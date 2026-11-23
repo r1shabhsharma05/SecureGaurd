@@ -311,7 +311,10 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         lineStart: f.lineStart,
         lineEnd: f.lineEnd,
         codeSnippet: f.codeSnippet,
-        status: 'open'
+        status: 'open',
+        // The prod column is NOT NULL with no DB default, and createMany
+        // omits unlisted fields — send it explicitly or every insert fails.
+        detectedInScanIds: [scan.id]
       }));
       if (dbFindings.length > 0) await withOrgContext(repo.organizationId, repo.userId, (tx) => tx.vulnerability.createMany({ data: dbFindings }));
       const matchedIds = [...new Set(matched.map((m) => m.existingId).filter(Boolean))];

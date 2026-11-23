@@ -100,3 +100,48 @@ webhooks still own paid period dates). One-function backend change + test.
 4. Cold start: paid Render or external pinger (owner call).
 5. Gate still NOT PASSED (25/14/4/3 at Day 10): SEC-03 history purge,
    SEC-32 backups, SEC-34 Turnstile remain owner-gated.
+
+---
+
+## Addendum — post-fix verification (23 Nov 2026, ~12:25 IST)
+
+Bug 1 + Bug 2 fixes pushed as `e3aac19` (6 files, incl. this report) and
+live-verified:
+
+- **Bug 1 FIXED live:** V-0237 now shows "gemini-3.1-flash-lite Engine"
+  (Remediation History likewise). No more "Google Gemini 3.1 Flash".
+- **Bug 2 FIXED live:** Billing shows 4/10 used, 6 remaining, period ends
+  12/19/2026 (was 10/10, 0 remaining, ended 11/19/2026). After the fresh
+  scan below: 5/10, 5 remaining.
+- **Counts still agree:** Dashboard 72 (45/22/5/0, Health 20/100) =
+  Vuln Database 72 open.
+
+### Bug 3 (found by the fresh scan) — scan inserts fail on detectedInScanIds
+
+Fresh scan **S-0022** ran (377 files, 5.80s, 72 findings at scan time) but
+recorded **0 findings**: `prisma.vulnerability.createMany()` failed with
+"Null constraint violation on the (not available)". Scan row: status
+`failed`, errorMessage stored, 0 Vulnerability rows for scanId 22.
+
+Root cause (measured in prod DB, 23 Nov): `Vulnerability.detectedInScanIds`
+is **NOT NULL with no column default**, although migration
+`20261119_detected_scans_ai_engine` declares `DEFAULT '{}'` — the
+`IF NOT EXISTS` add was a no-op against a column that already existed
+without the default. `createMany` omits unlisted fields, and both insert
+sites (`services/scanRunner.js`, `routes/integration.js`) omitted
+`detectedInScanIds`, so every fresh-finding insert is rejected. Scanner
+output itself has no nulls (local run: 72 findings, 0 null required
+fields). Why S-0021 succeeded on 19 Nov is not fully reconstructable
+(column/default state at that hour is unrecorded); the current state is
+measured and the fix does not depend on the history.
+
+Fix (prepared, needs owner word to push — push auto-deploys): send
+`detectedInScanIds: [scan.id]` explicitly in both createMany mappings
+(semantically right: a fresh finding was detected in this scan), plus a
+regression test in `backend/tests/retest2Fixes.test.js`. Suite after fix:
+165 tests, 163 pass, 2 pre-existing env failures. Optional DB-side
+alignment (owner, one line in SQL Editor):
+`ALTER TABLE "Vulnerability" ALTER COLUMN "detectedInScanIds" SET DEFAULT '{}';`
+No schema/migration change was made: a DDL migration would run under the
+least-privilege `secureguard_app` role on Render preDeploy and could
+block deploys.

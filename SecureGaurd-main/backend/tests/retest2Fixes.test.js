@@ -195,3 +195,13 @@ test('AI engine label shows the raw engine string, no invented pretty name', () 
   assert.doesNotMatch(src, /Google Gemini \$\{/);
   assert.doesNotMatch(src, /'Google Gemini 1\.5 Flash'/);
 });
+
+test('scan inserts send detectedInScanIds explicitly (prod column has no DB default)', () => {
+  // Prod Vulnerability.detectedInScanIds is NOT NULL with no column default
+  // (measured 23 Nov 2026); createMany omits unlisted fields, so omitting
+  // it failed every scan insert with a null-constraint error (S-0022).
+  for (const p of ['backend/services/scanRunner.js', 'backend/routes/integration.js']) {
+    const src = readSrc(p);
+    assert.match(src, /detectedInScanIds: \[scan\.id\]/);
+  }
+});

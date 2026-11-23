@@ -315,7 +315,10 @@ async function executeScan({ scanId, organizationId, userId, repositoryId }) {
         // Persist the classifier outcome: suppressed FPs stay 'ignored' so
         // list views and stats (which count open only) agree with counters.
         status: f.status || 'open',
-        mlFeatures: f.mlFeatures ? f.mlFeatures : null
+        mlFeatures: f.mlFeatures ? f.mlFeatures : null,
+        // The prod column is NOT NULL with no DB default, and createMany
+        // omits unlisted fields — send it explicitly or every insert fails.
+        detectedInScanIds: [scan.id]
       }));
       if (dbFindings.length > 0) await ctx((tx) => tx.vulnerability.createMany({ data: dbFindings }));
       // Record the re-detections: the scan-detail page lists findings by
