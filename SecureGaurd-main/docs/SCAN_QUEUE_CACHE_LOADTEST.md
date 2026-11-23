@@ -121,6 +121,53 @@ delta; in production a HIT skips a Postgres round-trip.
 > to 716 ms (8.6×) with zero failed scans and a measured 95% cache hit
 > rate on vulnerability lists.
 
+### Scaling run (2026-11-23): 50 → 500 concurrent
+
+Same harness and fixture, re-run on the dev VM (1.5 shared CPUs,
+6 GiB RAM, Node v24.22.1, locally built Redis 8.12.0 on :6390 with
+`maxmemory 512mb` / `allkeys-lru`, worker concurrency 2 = default).
+The harness now accepts `concurrent<N>` for any N. Each run includes
+1 warmup scan, so completed totals are N+1. Queue depth / Redis memory
+/ node RSS were sampled every 500 ms during each run.
+
+| Scenario | Submit p50 / p95 / p99 (ms) | Turnaround p50 / p95 / p99 (ms) | Wall (all submits) | Completed | Max queue depth | Redis peak mem | Node RSS peak |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 50 (dry run) | 221 / 425 / 426 | 2,836 / 3,884 / 3,888 | 440 ms | 51/51 | 46 | 2.0 MiB | — |
+| 100 | 377 / 739 / 750 | 4,652 / 7,368 / 7,626 | 769 ms | 101/101 | 93 | 2.2 MiB | 391 MiB |
+| 250 | 1,242 / 2,123 / 2,257 | 9,352 / 16,748 / 17,360 | 2,309 ms | 251/251 | 231 | 2.2 MiB | 555 MiB |
+| 500 | 2,290 / 3,652 / 3,763 | 17,047 / 30,215 / 31,559 | 3,860 ms | 501/501 | 461 | 2.4 MiB | 652 MiB |
+
+(50-run RSS not recorded — the sampler tracked the wrapper shell on
+that first run; queue depth and Redis memory are from redis-cli and
+are valid.)
+
+- **Failure rate 0 at every level.** Redis `evicted_keys` stayed 0 —
+  peak usage was 2.4 MiB of the 512 MiB cap (queue jobs are small; the
+  cap was never a factor). Node CPU peaked at 105–123% (of one core).
+- **Cache scenario re-run:** 1 MISS + 19 HITs, hit rate **0.95**,
+  p50 2 ms — identical to the original measurement.
+- **The 100 re-run lands next to the original numbers** (submit p95
+  739 vs 716 ms; turnaround p95 7,368 vs 6,745 ms; wall 769 vs 936 ms),
+  so the ladder is comparable to the table above.
+- **Degradation is gradual, not a cliff.** Submit p95 grows ~5× from
+  100 → 500 (event-loop contention: API, worker, and the harness's own
+  500 fetch clients share one process on a shared-CPU VM). Turnaround
+  p95 grows ~4× because total scan work is proportional to N at fixed
+  worker concurrency 2 — the queue absorbs the burst and the tail is
+  throughput-bound, exactly as designed.
+- **No tuning was applied** — nothing failed, Redis never approached
+  its cap, and the backlog drained on its own at every level. If the
+  turnaround tail matters more than CPU headroom, raising
+  `SCAN_WORKER_CONCURRENCY` is the knob; measure before changing the
+  default. It was not changed here.
+
+Caveats are the same as above: in-memory DB stub (no Postgres
+roundtrips), classifier unreachable by design, 152-file fixture,
+250 ms poll granularity (turnaround includes up to one poll interval
+plus sequential-poll detection lag), single process on a shared-CPU VM.
+Raw outputs: `loadtest-{50,100,250,500,cache}.json` + sampler logs
+(kept with the run artifacts, not in the repo).
+
 ## Reproducing the numbers (your own machine)
 
 The harness does not ship its fixture — generate it first, one command:

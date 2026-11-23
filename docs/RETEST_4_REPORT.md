@@ -145,3 +145,30 @@ alignment (owner, one line in SQL Editor):
 No schema/migration change was made: a DDL migration would run under the
 least-privilege `secureguard_app` role on Render preDeploy and could
 block deploys.
+
+### Bug 3 fix — pushed and live-verified (23 Nov, ~12:52–12:59 IST)
+
+Fix pushed as `14367bd` ("fix scan findings not saving", 5 files; remote
+file list verified, tree identical, clone synced). Fresh scan **S-0023**
+(12:55 IST, 377 files, 6.10s) then **completed and saved findings** — the
+createMany error is gone:
+
+- S-0023 detail: COMPLETED, 72 findings at scan time (45/22/5/0),
+  "Findings in this scan (72)" — 71 re-detections recorded via
+  `detectedInScanIds` + 1 new row inserted (**V-0242**, Potential SQL
+  Injection, CRITICAL, `backend/tests/rlsMigration.test.js:91`).
+- Live totals moved 72 → **73 open (46C/22H/5M/0L)**, Health 20/100;
+  Dashboard = Vuln Database agree. (73 = 72 previously open + 1 new; one
+  previously-open finding was not re-detected by S-0023 and remains open.)
+- Quota after S-0023: 6/10 used, 4 remaining, period ends 12/19/2026.
+  Security Scans count: 12.
+- One transient artifact: immediately after S-0023, the Scans list and
+  dashboard showed stale values (RUNNING / S-0021's 371 files) until a
+  hard reload a few minutes later — org-cache lag, not a status bug.
+  After reload, list and detail agree (COMPLETED, 377 files, 6.10s).
+- S-0022 remains FAILED historically with its stored error (no backfill).
+
+**Re-test #4 verdict: all three bugs fixed and live-verified.** Remaining
+owner-gated items are unchanged (gate 25/14/4/3 NOT PASSED: SEC-03,
+SEC-31 Step E, SEC-32, SEC-34; Razorpay live KYC; cold-start decision;
+`scan-test` key revoke is owner's call).

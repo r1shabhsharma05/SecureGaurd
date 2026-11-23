@@ -2,7 +2,7 @@
 // Scan performance harness — measures the REAL trigger path end to end.
 // Run from SecureGaurd-main:
 //   SCAN_LOCAL_BASE=/home/hatch/workspace/tmp-work/scan-fixtures \
-//   node backend/tests/scanPerfHarness.js [before|after] [single|concurrent100|cache]
+//   node backend/tests/scanPerfHarness.js [before|after] [single|concurrent<N>|cache]
 //
 // How it works: the prisma client, auth, RBAC and billing are stubbed in
 // the require cache (same pattern as backend/tests/rbac.test.js), so no
@@ -197,7 +197,9 @@ async function triggerOne(ip) {
 }
 // Turnaround is measured from SUBMIT start to the terminal poll, not
 // from the first poll — the worker runs while the 202 is in flight.
-async function pollScan(id, submitT0, timeoutMs = 120000) {
+// Timeout is generous (15 min): at 500 concurrent with worker
+// concurrency 2, the last scan's turnaround is minutes, not seconds.
+async function pollScan(id, submitT0, timeoutMs = 900000) {
   for (;;) {
     const res = await fetch(`http://127.0.0.1:${PORT}/api/scans/${id}`, { headers: { 'X-Forwarded-For': '127.0.0.1' } });
     const scan = await res.json().catch(() => ({}));
@@ -251,7 +253,10 @@ async function main() {
     result.hitRate = cacheStates.filter((s) => s === 'HIT').length / cacheStates.length;
     result.vulnRows = db.vulnerabilities.length;
   } else {
-    const N = SCENARIO === 'concurrent100' ? 100 : SCENARIO === 'concurrent10' ? 10 : 3;
+    // concurrent<N> scenarios (10/50/100/250/500) parse N from the name;
+    // single keeps the original 3 sequential triggers.
+    const concurrentMatch = SCENARIO.match(/^concurrent(\d+)$/);
+    const N = concurrentMatch ? parseInt(concurrentMatch[1], 10) : 3;
     const concurrent = SCENARIO.startsWith('concurrent');
     // Warmup (not counted): one trigger to warm require/module caches.
     const w = await triggerOne('10.0.0.250');
