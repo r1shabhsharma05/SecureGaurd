@@ -186,8 +186,12 @@ test('Gemini failures log Google\'s error body, not just the status code', () =>
   assert.match(src, /Gemini API error: \$\{response\.status\} \$\{detail\}/);
 });
 
-test('AI engine label derives the Gemini version from the engine string', () => {
+test('AI engine label shows the raw engine string, no invented pretty name', () => {
   const src = readSrc('src/components/VulnerabilityDetailsPage.tsx');
-  assert.match(src, /gemini-\(\[\\d\.\]\+\)-flash/);
+  // The label is the model token verbatim (e.g. gemini-3.1-flash-lite).
+  assert.match(src, /\^\(gemini-\[\\w\.-\]\+\)/);
+  // The old pretty-name mapper invented "Google Gemini 3.1 Flash" from
+  // gemini-3.1-flash-lite — a model that does not exist. It must stay gone.
+  assert.doesNotMatch(src, /Google Gemini \$\{/);
   assert.doesNotMatch(src, /'Google Gemini 1\.5 Flash'/);
 });

@@ -107,8 +107,21 @@ async function getOrgUsage(organizationId, tx = null) {
 
   // Determine period boundaries
   const now = new Date();
-  const startOfPeriod = sub.currentPeriodStart || new Date(now.getFullYear(), now.getMonth(), 1);
-  const endOfPeriod = sub.currentPeriodEnd || new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+  let startOfPeriod = sub.currentPeriodStart
+    ? new Date(sub.currentPeriodStart)
+    : new Date(now.getFullYear(), now.getMonth(), 1);
+  let endOfPeriod = sub.currentPeriodEnd
+    ? new Date(sub.currentPeriodEnd)
+    : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+  // Roll an ended period forward by whole months. Nothing else advances a
+  // FREE row's period, so without this the usage window stays pinned in
+  // the past and the scan quota never resets. An active paid period
+  // (end > now) is untouched — Razorpay webhooks own paid period dates.
+  while (endOfPeriod <= now) {
+    startOfPeriod = new Date(startOfPeriod.getFullYear(), startOfPeriod.getMonth() + 1, startOfPeriod.getDate());
+    endOfPeriod = new Date(endOfPeriod.getFullYear(), endOfPeriod.getMonth() + 1, endOfPeriod.getDate());
+  }
 
   // 1. Repositories count
   const reposCount = await db.repository.count({
