@@ -20,7 +20,7 @@ declare global {
   }
 }
 
-const SCRIPT_URL = 'https://challenges.cloudflare.com/turnstile/api.js?render=explicit';
+const SCRIPT_URL = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 let scriptPromise: Promise<void> | null = null;
 
 function loadTurnstileScript(): Promise<void> {
