@@ -1078,16 +1078,20 @@ below).
   needs its own policy added before apply (expect 17 policies, not
   16). Steps (2)–(5) still outstanding. Full rollout procedure:
   `docs/DATABASE_SECURITY.md` §6.1. Stays FAIL.
-  **Day 10 (2026-11-23):** rollout step (2) is DONE and live-verified
-  (Supabase SQL Editor, read-only): `secureguard_app` exists (LOGIN,
-  NOSUPERUSER, NOBYPASSRLS) and is the app credential after the
-  22 Nov fix-forward. `pg_policies` = 20, all `app_full_access`
-  (role `{secureguard_app}`, ALL, qual=true — permissive); **0
-  tenant-scoped policies**; all 20 public tables RLS-enabled, none
-  FORCEd. The 17-policy tenant migration is still NOT applied —
-  tenant isolation remains application-level only. Stays FAIL until
-  Step E (tenant policies + live matrix) completes; Step E needs
-  owner decisions (backup-first, extra tables, export-feedback).
+  **Day 12 (2026-11-25):** Step E dry-run on a scratch PGlite 0.4.3
+  (24 Nov backup restored: 20 tables, User 29 / Org 21 / Scan 21 /
+  Vulnerability 122, 20 permissive policies). Pre-steps applied
+  cleanly (0 policies, RLS on 14 / off on 6); migration applied
+  cleanly, self-check passes (17 policies / 14 tables, RLS+FORCE on
+  all 14). Two scratch-only findings: (1) migration needs an explicit
+  `SET search_path TO public;` first — a session with an empty
+  search_path fails at §1 (guard note added to
+  `docs/SEC31_STEP_E_APPLY.sql`); (2) behavioural isolation could NOT
+  be verified in the scratch env (pglite-server ignores the requested
+  role and errors on any RLS-table read as non-superuser, proven on a
+  trivial control table) — in-process suite 12/12 still proves the
+  policy logic; real-data proof stays with the live apply. Stays FAIL
+  until Step E completes; owner decisions still owed.
 - **Reviewer notes:** implement Postgres RLS on Day 7, with the live
   cross-tenant matrix as the verification. The app connects with a single
   `DATABASE_URL` credential — RLS design must account for that (either a

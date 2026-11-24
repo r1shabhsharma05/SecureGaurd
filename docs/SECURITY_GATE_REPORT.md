@@ -2,14 +2,15 @@
 
 **Date:** 2026-11-20 (Day 7 of the 20-day program)
 **Verdict: GATE NOT PASSED**
-**Checklist:** `docs/SECURITY_HARDENING_CHECKLIST.md` — 28 PASS / 13 PARTIAL /
-2 FAIL / 0 BLOCKED / 3 NOT APPLICABLE (46 items) — **four items crossed
-since the 24/15/4/3 recount**: SEC-18 + SEC-22 (strict id params, Day 11
-commit `b36b839`), SEC-34 (Turnstile live, commit `1a11ff9`) and SEC-32
-(first backup + trial restore, 24 Nov evening). Count
-note: the Day 11 cron log claimed 27/12/4/3 before SEC-34 closed; the
-arithmetic from the 24/15/4/3 baseline is 27/13/3/3 — the one-item
-discrepancy is for the Day 12 full recount to settle.
+**Checklist:** `docs/SECURITY_HARDENING_CHECKLIST.md` — 29 PASS / 12 PARTIAL /
+2 FAIL / 0 BLOCKED / 3 NOT APPLICABLE (46 items) — **five items crossed
+since the 24/15/4/3 recount**: SEC-13 (0 OSV findings, Day 10),
+SEC-18 + SEC-22 (strict id params, Day 11 commit `b36b839`), SEC-34
+(Turnstile live, commit `1a11ff9`) and SEC-32 (first backup + trial
+restore, 24 Nov evening). Count note (settled Day 12, 25 Nov): the
+checklist file itself counts 29/12/2/0/3; the 28/13 figure in earlier
+Day 11 text was a one-item arithmetic slip — SEC-13's Day 10 crossing
+was missed in the report's addition, not in the file.
 **Commits covered:** everything through `7d471db` (Day 5 `21def6a`,
 Day 6 `4809fa0`, queue/cache `84212d9`, E2E batches `76149f2`/`b8d1ffb`,
 API keys + connect fix `9611676`, dashboard fixes `dce4e57`/`f1527bf`,
@@ -18,7 +19,7 @@ re-test batches `ffad4fa`/`bfe2e6c`, Gemini `bda7896`/`c3b05e0`, perf
 **Gate rule (Day 7):** every applicable item PASS with evidence, no
 unresolved critical/high issues, all exceptions documented and approved.
 **Phase 4 rule: do not start Phase 4 features until this gate passes.
-Day 8 (scanning engine) is therefore BLOCKED until the 4 FAILs below
+Day 8 (scanning engine) is therefore BLOCKED until the 2 FAILs below
 clear. This report does not disguise any FAIL as PASS.**
 
 Supersedes the 2026-11-18 gate-pass run report. Database detail:
@@ -54,7 +55,7 @@ origin. No probe accounts created.
 
 ---
 
-## Why the gate does NOT pass — the 4 FAILs (all owner-gated)
+## Why the gate does NOT pass — the 2 FAILs (all owner-gated)
 
 ### SEC-03 — Secrets in git history (FAIL)
 Commit `e1e3dc9` (2026-04-16) committed `backend/.env` with a real
@@ -388,3 +389,73 @@ Still blocked on the owner: history-rewrite word + Atlas MFA code
 the Day 11 code commit first (verify HEAD, verify commit + SHAs),
 then re-check the gate; if it still fails, Day 12 work stays limited
 to gate-clearing support.
+
+## Day 12 re-check + SEC-31 dry-run (2026-11-25) — still NOT PASSED
+
+Counts: **29 PASS / 12 PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A** (recount
+settled — see header). No item crossed; nothing regressed. The Day 11
+push had already landed before this run: remote HEAD `c8aa61c` ==
+local HEAD (the three Day 11 push attempts did land one commit; the
+log's "push failed" was a stale read after a service restart). Phase 4
+(Day 12 repository integrations) did **not** start; Day 12 work was
+gate-clearing support + a read-only audit of the Day 12 scope.
+
+- **Fresh evidence (base `c8aa61c`):** backend suite **167/169** (same 2
+  known env fails: compliance = live Postgres, deployment_config =
+  real secrets); OSV **589 packages, 0 vulnerable** (SEC-13 PASS
+  holds; raw `hidden_files/osv-scan-results-2026-11-25.json`);
+  RLS coverage **63 files / 0 bare**; Gitleaks full history **6
+  findings, identical set to 20 Nov** (SEC-03 unchanged — same 6 FPs,
+  0 real secrets by default rules; raw
+  `hidden_files/gitleaks-full-history-2026-11-25.json`). Live probes:
+  frontend 200 (full landing render), backend `/health`
+  `{"status":"ok","db":"up"}`, classifier `model_loaded: true`
+  v2.2.1 / `v3_real`; OAuth providers live = google + github only.
+- **Day 12 audit — `docs/REPOSITORY_INTEGRATIONS_AUDIT.md`:**
+  GitHub OAuth live; GitLab OAuth code-only (no app/env — owner step);
+  PATs encrypted (AES-256-GCM) and used for repo listing + PR bot only;
+  webhooks implemented + code-verified (HMAC-SHA256 raw-body GitHub,
+  token-compare GitLab, per-repo secret, fail-closed, idempotent) but
+  with **zero automated tests** and no live verification; repo sync
+  **not implemented** (no scheduler anywhere); PR bot real (GitHub-only).
+  Headline gap, stated plainly: **private cloning does NOT exist** —
+  the scanner clones anonymously, `validateCloneUrl` rejects
+  credentialed URLs, and `POST /api/repos` rejects non-public URLs, so
+  plan acceptance #3 ("Private repository scans work") is unmet. Fix
+  sketched in the audit (GIT_ASKPASS + least-privilege PAT, never in
+  URL/logs) — NOT built, gate-blocked.
+- **SEC-31 Step E dry-run (scratch PGlite 0.4.3, 24 Nov backup
+  restored):** prod-shaped restore verified (20 tables; User 29, Org
+  21, Scan 21, Vulnerability 122 — exact match to the 24 Nov record;
+  20 permissive policies, RLS on 20 tables). Pre-steps
+  (`docs/SEC31_STEP_E_APPLY.sql` §1–2) applied cleanly → 0 policies,
+  RLS on 14 tenant tables, off on the 6 non-tenant. Migration applied
+  cleanly → **self-check passes: 17 policies on 14 tables, RLS+FORCE
+  on all 14, disabled on the 6**. Two scratch-only findings: (1) the
+  migration fails in a session with an empty `search_path` (§1,
+  "no schema has been selected to create in") — the pglite-server
+  session inherited the empty path from pg_restore's `set_config`;
+  a fresh Supabase SQL Editor session has the default path, so this
+  does not block the real apply, but a `SET search_path TO public;`
+  guard note was added to the pre-steps file; (2) behavioural
+  isolation could NOT be verified in this scratch env — pglite-server
+  ignores the requested role (always superuser, bypasses RLS) and
+  raises "query would be affected by row-level security policy" on
+  any RLS-table read as a non-superuser, proven on a trivial control
+  table with a trivial policy. The in-process suite
+  (`rlsMigration.test.js`, 12/12, stub data) already proves the
+  policy logic; real-data behavioural proof stays with the live
+  apply (SQL Editor step 4d smoke). Full log:
+  goal `hidden_files/day12-dryrun.log`. Scratch DB holds a copy of
+  prod data (backup-derived) — local only, 0600, never pushed.
+- **SEC-32 archive re-verified:** pg_restore 17.12 `--list` reads the
+  24 Nov archive; TOC identical to the stored manifest (255 entries,
+  20 tables). Note: pg_restore 16 rejects this 17.12-written archive —
+  use the 17 client (`~/workspace/pg-client-17`).
+
+Still blocked on the owner: history-rewrite word + Atlas MFA code
+(SEC-03), SEC-31 Step E decisions (backup-first, extra tables,
+export-feedback 503 design), classifier-copy deletion approval
+(SEC-06), 2 mailboxes for the live matrix. Day 13 (26 Nov) re-checks
+the gate first; if it still fails, Day 13 work stays limited to
+gate-clearing support — no Phase 4 features.
