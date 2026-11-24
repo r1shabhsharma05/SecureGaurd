@@ -38,9 +38,9 @@ document.
 
 | Status | Count |
 |---|---|
-| PASS | 25 |
-| PARTIAL | 14 |
-| FAIL | 4 |
+| PASS | 28 |
+| PARTIAL | 13 |
+| FAIL | 2 |
 | BLOCKED | 0 |
 | NOT APPLICABLE | 3 |
 | **Total merged items** | **46** |
@@ -48,9 +48,9 @@ document.
 FAIL items (must clear before the Day 7 gate): SEC-03 (secrets in git
 history — purge procedure ready, needs the owner's word), SEC-31 (Row Level
 Security — app role live with 20 permissive policies since 22 Nov, tenant
-policies still not applied), SEC-32 (database backups —
-never taken), SEC-34 (CAPTCHA fail-open — keys unset, re-confirmed live
-2026-11-16). Fixed by the fix-all run: SEC-09 (email verification is a
+policies still not applied). SEC-34 CLOSED 2026-11-24 (Turnstile live — see SEC-34
+note). SEC-32 CLOSED 2026-11-24 (first backup + trial restore passed —
+see SEC-32 note). Fixed by the fix-all run: SEC-09 (email verification is a
 real gate now), SEC-37 (fake scan progress removed), SEC-19 (CSP live on
 both hosts). SEC-06 moved FAIL → PARTIAL (mongoose removed; file deletions
 outstanding). SEC-13 moved BLOCKED → PARTIAL (measured: 15 findings,
@@ -94,6 +94,28 @@ production probes 200. Gate verdict: still **NOT PASSED** — the 4
 FAILs (SEC-03, SEC-31, SEC-32, SEC-34) stand; Phase 4 (Day 10
 ML/AI) has not started — gate rule. See the Day 10 section in
 `docs/SECURITY_GATE_REPORT.md`.
+**Day 11 (2026-11-24):** counts CHANGED — **27 PASS / 13 PARTIAL /
+3 FAIL / 0 BLOCKED / 3 N/A**. SEC-18 + SEC-22 crossed to PASS (strict
+id params, commit `b36b839` — see SEC-18 note; suite 167/169, same 2
+env failures) and SEC-34 crossed to PASS (Turnstile live end to end,
+commit `1a11ff9` — see SEC-34 note). The Day 11 cron's own code was
+wiped by a mistaken `git reset --hard` and re-applied + re-verified
+the same day (same commit message, same 11 files); see
+`docs/SECURITY_GATE_REPORT.md` Day 11 section. Remaining FAILs:
+SEC-03 (history purge), SEC-31 (tenant RLS), SEC-32 (backups — pg_dump
+blocked on RLS as the app role, owner path choice pending). Gate
+verdict: still **NOT PASSED** — Phase 4 has not started. Count note:
+the Day 11 cron log claimed 27/12/4/3 before SEC-34 closed; the
+arithmetic from the 24/15/4/3 baseline (SEC-18, SEC-22 out of
+PARTIAL; SEC-34 out of FAIL) is 27/13/3/3 — the one-item discrepancy
+is for the Day 12 full recount to settle, not for editing counts here.
+**Same evening (2026-11-24 ~19:15 IST): SEC-32 also closed** — owner
+picked the postgres-password reset path; password reset via dashboard,
+first backup `secureguard-20261124-134015.dump.gz` (20 tables) +
+trial restore into a local PG 17 scratch DB passed (row counts
+matched on all spot-checked tables). Counts now **28 PASS / 13
+PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A**; remaining FAILs SEC-03 +
+SEC-31. See the SEC-32 note.
 
 Companion document: `docs/THREAT_MODEL.md` — the threat model behind these
 checks, with the prioritized risk register (T1–T17) and the fix-day mapping.
@@ -685,7 +707,7 @@ below).
 - **Reviewer notes:** fix Day 6.
 
 ### SEC-18 — Sanitize user input / sanitize forms
-- **Status:** PARTIAL
+- **Status:** PASS
 - **Sources:** screenshots 03, 07
 - **Files inspected:** `backend/utils/publicSite.js:52-85`
   (`validateContactInput`), `backend/routes/public.js:87-92`,
@@ -741,6 +763,22 @@ below).
   Validation + RBAC + RLS-migration tests 47/47; full backend suite
   160/162 (same 2 env failures). Stays PARTIAL — gap is now consistency
   on 19 routes, not absence; no route is unvalidated.
+  **Day 11 (2026-11-24, commit `b36b839` "strict id params, no parseint
+  coercion"):** the remaining gap closed — route-by-route audit found
+  the real hole was id-param coercion (`parseInt("12abc")` → 12,
+  `Number("12.5")` → 12.5), not missing `validateBody` (every
+  body-bearing mutating route already runs it; the 19 inline routes are
+  bodyless/signature/query-or-body by design). `parseIdParam` added to
+  `backend/utils/validation.js` (digits-only safe positive int, else
+  null) and wired at **25 sites across 10 files** (16 `parseInt` +
+  8 `Number` path params + the `?scanId=` filter), each route keeping
+  its existing 400 message; `grep parseInt(req.params|Number(req.params`
+  after: no leftovers. New `backend/tests/validationParams.test.js`
+  **4/4** (literals pinned); full backend suite **167/169** (same 2 env
+  failures); frontend build green; secret-scan of the diff clean.
+  Deliberately untouched: body/query id parses (`req.body` memberId,
+  `req.body` scanId, `?repositoryId`, pagination `page`/`limit`) —
+  out of this item's path-param scope.
 - **Reviewer notes:** do not confuse the scanner's `sanitizerPatterns.json`
   (AST feature detection) with input sanitization — different thing.
 
@@ -818,7 +856,7 @@ below).
 - **Reviewer notes:** none.
 
 ### SEC-22 — Input validation (backend) — see SEC-18
-- **Status:** PARTIAL — merged into SEC-18 (same evidence, same gap).
+- **Status:** PASS — merged into SEC-18 (same evidence, same gap).
   Fix-all run: shared zod library exists + 3 routes wired (see SEC-18);
   remaining routes still ad-hoc.
   **Gate pass (2026-11-18):** measured — 45 of 48 mutating routes lack
@@ -832,6 +870,8 @@ below).
   refresh/logout/complete-onboarding (no body). 39 routes remain ad-hoc
   — Day 8+ refactor, not a silent change. See
   `docs/BACKEND_SECURITY.md`.
+  **Day 11 (2026-11-24):** PASS with SEC-18 — same evidence (strict
+  id params, commit `b36b839`, 25 sites, tests 4/4 + suite 167/169).
 - **Sources:** screenshot 03 ("sanitize forms" overlaps screenshot 06
   "form validation" — the frontend half is SEC-34).
 - **Reviewer notes:** kept as a pointer so the screenshot-03 item is not
@@ -1055,7 +1095,7 @@ below).
   not actually enforce anything.
 
 ### SEC-32 — Database backups
-- **Status:** FAIL
+- **Status:** PASS
 - **Sources:** screenshot 06
 - **Files inspected:** `docs/BACKUP_AND_RESTORE.md`
 - **Implementation evidence:** the doc states honestly that NO backup has
@@ -1074,11 +1114,30 @@ below).
   script `backend/scripts/backup-db.sh` exists; it needs `pg_dump` +
   production `DATABASE_URL` (Render env only). No backup ever taken, no
   trial restore performed. Still FAIL.
-- **Remaining risk:** high. A destructive bug, a bad migration, or a
-  Supabase incident is unrecoverable. This is a Day 7 production blocker.
+- **Remaining risk:** low — a backup now exists and restores. Gaps
+  that remain: the archive is UNENCRYPTED (no passphrase set yet);
+  no recurring schedule yet (daily suggested until Supabase automated
+  backups are confirmed, weekly after); `_prisma_migrations` does not
+  exist in prod (schema synced without migration history) so restores
+  carry data + policies but no migration state.
 - **Reviewer notes:** Day 7 must take a backup AND restore-test it into a
   disposable database and record the procedure. Do not mark PASS on a
   backup that was never restored.
+  **Day 11 close-out (2026-11-24 ~19:15 IST):** PASS. Owner picked the
+  free `pg_dump` route, then the postgres-password reset path (dashboard
+  reset, user-chosen password, 19:08 IST). `pg_dump` 17.12 as the
+  `postgres` role (direct connection; the app role cannot dump — RLS
+  blocks pg_dump's COPY/cursor, proven). Archive
+  `backend/backups/secureguard-20261124-134015.dump.gz` (1.6 MB, 0600,
+  manifest lists all 20 public tables + data). Script fixes landed:
+  `--schema=public` + `--inserts`, manifest step fixed (pg_restore
+  does not read stdin — temp file first). Trial restore into a local
+  PG 17.12 scratch DB (PGDG server, run as `nobody`, deleted after):
+  with `secureguard_app` created first, pg_restore completed with
+  only the benign `schema "public" already exists` error; 20/20
+  tables + 20/20 policies restored; row counts matched prod exactly
+  (User 29, Organization 21, Scan 21, Vulnerability 122, ApiKey 2,
+  Repository 9). Full record: `docs/BACKUP_AND_RESTORE.md` §2–§3.
 
 ### SEC-33 — Secure database (general: least privilege, migrations, retention)
 - **Status:** PARTIAL
@@ -1119,7 +1178,7 @@ below).
 ## F. Production security
 
 ### SEC-34 — CAPTCHA on public forms
-- **Status:** FAIL
+- **Status:** PASS
 - **Sources:** screenshot 07
 - **Files inspected:** `backend/utils/turnstile.js`,
   `backend/routes/auth.js:98,333`, `backend/routes/public.js:87`,
@@ -1160,13 +1219,31 @@ below).
   site key** is baked in — `VITE_TURNSTILE_SITE_KEY` still unset, so
   the guard still passes requests through. FAIL re-confirmed without
   creating probe rows.
-- **Remaining risk:** medium — no bot protection on signup, password reset
-  or contact until the key is set.
+- **Remaining risk:** low — bot protection live on signup,
+  forgot-password and contact. The `/login` route has no Turnstile
+  guard by design (rate-limited; not part of this item's scope).
 - **Reviewer notes:** fix = Rishabh creates the Turnstile widget in
   Cloudflare and sets `TURNSTILE_SECRET_KEY` on Render +
   `VITE_TURNSTILE_SITE_KEY` on Vercel (his step, Day 4). Do NOT flip the
   guard to fail-closed before the keys exist — that repeats the Nov 8
   outage.
+  **Day 11 close-out (2026-11-24):** PASS, verified end to end.
+  Cloudflare widget "SecureGaurd" (Managed, hostname
+  `secureguard-main.vercel.app`); `TURNSTILE_SECRET_KEY` set on Render
+  (deploy Live 12:24 IST), `VITE_TURNSTILE_SITE_KEY` set on Vercel
+  Production (redeploy ready 12:29 IST); site keys verified MATCH
+  character by character. Backend enforcement proven by direct POST:
+  `POST /api/auth/register` with no token → **400** ("Security check
+  is required"); register without a token is also blocked client-side.
+  The live widget initially failed to load ("The security check failed
+  to load") — root cause was a wrong script URL in
+  `TurnstileWidget.tsx` (`turnstile/api.js` 404s; correct URL is
+  `turnstile/v0/api.js`, verified 200), fixed in one line, commit
+  `1a11ff9` "update turnstile script url", pushed on his word. Live
+  probe after deploy (cloud browser, 13:02 IST): `/signup` renders the
+  widget — "Verify you are human" checkbox + Cloudflare logo, no
+  error. Note: `/login` accepting a no-token request is by design —
+  the guard covers register/forgot-password/contact only.
 
 ### SEC-35 — Log admin actions
 - **Status:** PASS

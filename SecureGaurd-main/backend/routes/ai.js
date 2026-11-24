@@ -8,6 +8,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 // the read and the write, so one transaction is wrong).
 const { withRequestOrgContext } = require('../utils/rlsContext');
 const { generateAiFix, GEMINI_MODEL } = require('../utils/aiFixEngine');
+const { parseIdParam } = require('../utils/validation');
 
 router.use(authMiddleware);
 router.use(requireOrgContext);
@@ -15,8 +16,8 @@ router.use(requireOrgContext);
 // POST /api/ai/fix/:vulnId — Generate AI fix for a vulnerability
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
-  const vulnId = parseInt(req.params.vulnId);
-  if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
+  const vulnId = parseIdParam(req.params.vulnId);
+  if (vulnId === null) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
     const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
@@ -98,8 +99,8 @@ router.post('/fix/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), asy
 // PATCH /api/ai/fix/:vulnId/apply — Mark AI fix as applied + resolve vulnerability
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.patch('/fix/:vulnId/apply', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
-  const vulnId = parseInt(req.params.vulnId);
-  if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
+  const vulnId = parseIdParam(req.params.vulnId);
+  if (vulnId === null) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
     const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({
@@ -135,8 +136,8 @@ router.patch('/fix/:vulnId/apply', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER'
 // PATCH /api/ai/false-positive/:vulnId — Mark as false positive
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.patch('/false-positive/:vulnId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), async (req, res) => {
-  const vulnId = parseInt(req.params.vulnId);
-  if (isNaN(vulnId)) return res.status(400).json({ message: 'Invalid vulnerability ID' });
+  const vulnId = parseIdParam(req.params.vulnId);
+  if (vulnId === null) return res.status(400).json({ message: 'Invalid vulnerability ID' });
 
   try {
     const vuln = await withRequestOrgContext(req, (tx) => tx.vulnerability.findFirst({

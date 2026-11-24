@@ -4,9 +4,11 @@
 # Takes a logical backup of the production PostgreSQL database (Supabase)
 # with pg_dump (custom format, gzipped) and verifies the archive before
 # calling it done. Run on a host that has BOTH the DATABASE_URL env var
-# and pg_dump installed (Render shell, or a laptop) — this VM has neither,
-# so the script is statically verified here (bash -n) and the first real
-# run is a HIS STEP (see docs/BACKUP_AND_RESTORE.md).
+# and pg_dump installed. pg_dump 17 lives home-installed on this VM at
+# ~/workspace/pg-client-17 (prod is Postgres 17.6); the postgres-role
+# DATABASE_URL comes from the Supabase dashboard reset (see
+# docs/BACKUP_AND_RESTORE.md). The app role cannot dump (RLS blocks
+# pg_dump's COPY/cursor), so backups run as the postgres role.
 #
 #   DATABASE_URL='postgres://...' BACKUP_DIR=./backups ./backup-db.sh
 #
@@ -54,14 +56,31 @@ STAMP="$(date -u +%Y%m%d-%H%M%S)"
 OUT="$BACKUP_DIR/secureguard-$STAMP.dump.gz"
 MANIFEST="$BACKUP_DIR/secureguard-$STAMP.manifest.txt"
 
-# Custom format (-Fc) so a trial restore can use pg_restore selectively.
-pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner --no-privileges \
+# Public schema only: the app's data lives entirely in public (all 20
+# Prisma tables + _prisma_migrations). A full dump also locks the
+# Supabase-managed schemas (auth, storage, realtime), which the
+# least-privilege app role cannot lock (SEC-31 role switch) — pg_dump
+# then aborts with "permission denied for schema auth". Supabase Auth /
+# Storage are not used by this app (own User table + JWT), so nothing
+# the app needs is left out.
+# --inserts (not COPY): pg_dump's COPY TO stdout refuses on RLS-enabled
+# tables unless the dumper is the table owner or BYPASSRLS ("query
+# would be affected by row-level security policy") — and this role is
+# neither. INSERTs come from plain SELECTs, which the permissive app
+# policies (USING true) let through, so every row is dumped. Slower
+# than COPY, but the database is small and correctness wins.
+pg_dump --dbname="$DATABASE_URL" --schema=public --format=custom --no-owner --no-privileges --inserts \
   | gzip -9 > "$OUT"
 
 # Verify: gzip integrity + the archive lists real database objects.
+# pg_restore does NOT read an archive from stdin ("-" is taken as a
+# literal filename), so decompress to a temp file first.
 gzip -t "$OUT"
-gzip -dc "$OUT" | pg_restore --list - > "$MANIFEST"
-TABLES="$(grep -c '^.*; .* TABLE ' "$MANIFEST" || true)"
+TMP_DUMP="$(mktemp)"
+trap 'rm -f "$TMP_DUMP"' EXIT
+gzip -dc "$OUT" > "$TMP_DUMP"
+pg_restore --list "$TMP_DUMP" > "$MANIFEST"
+TABLES="$(grep '^.*; .* TABLE ' "$MANIFEST" | grep -vc 'TABLE DATA' || true)"
 [ "$TABLES" -gt 0 ] || { echo "error: backup manifest lists no tables — refusing to keep a hollow backup" >&2; rm -f "$OUT" "$MANIFEST"; exit 1; }
 
 # Owner-only, even if the ambient umask was permissive (umask 077 above

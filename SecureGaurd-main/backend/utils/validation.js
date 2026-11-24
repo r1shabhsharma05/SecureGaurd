@@ -37,6 +37,17 @@ const zIntId = z.coerce
   .number({ error: 'A valid integer id is required.' })
   .int('Id must be an integer.')
   .positive('Id must be a positive integer.');
+// Strict id from a path or query param (Day 11, SEC-18 / SEC-22).
+// parseInt("12abc") silently yields 12 and Number("12.5") yields 12.5 —
+// a malformed id then resolves to a real record (or a Prisma type error)
+// instead of a 400. Accept only a digits-only string that is a safe
+// positive integer; anything else is null and the caller answers its
+// existing 400. Leading zeros still parse ("007" -> 7), as parseInt did.
+function parseIdParam(value) {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
 
 // Bounded string helper for free-text fields: trims, enforces length.
 function zString(min, max) {
@@ -326,6 +337,7 @@ module.exports = {
   zEmail,
   zPassword,
   zIntId,
+  parseIdParam,
   zString,
   zPagination,
   contactSchema,

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { validateBody, vulnStatusSchema, vulnLabelSchema } = require('../utils/validation');
+const { validateBody, vulnStatusSchema, vulnLabelSchema, parseIdParam } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const { authenticateRequest } = require('../middleware/apiKeyAuth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
       scan: { organizationId: req.organizationId },
       ...(severity && { severity }),
       ...(statusFilter && { status: statusFilter }),
-      ...(scanId && !isNaN(parseInt(scanId)) && { scanId: parseInt(scanId) }),
+      ...(scanId && parseIdParam(scanId) !== null && { scanId: parseIdParam(scanId) }),
     };
 
     const rows = await withRequestOrgContext(req, (tx) => tx.vulnerability.findMany({
@@ -57,8 +57,8 @@ router.get('/', async (req, res) => {
 
 // GET /api/vulnerabilities/:id — fetch single vulnerability details with org ownership check (cached 120 s, org-scoped; 404s are never cached)
 router.get('/:id', async (req, res) => {
-  const vulnId = Number(req.params.id);
-  if (!vulnId || isNaN(vulnId)) {
+  const vulnId = parseIdParam(req.params.id);
+  if (vulnId === null) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
   }
 
@@ -143,8 +143,8 @@ router.get('/:id', async (req, res) => {
 // SHAP values. The stored at-scan-time prediction/reasons in mlFeatures
 // remain the fallback the UI shows when this endpoint is unavailable.
 router.get('/:id/explanation', async (req, res) => {
-  const vulnId = Number(req.params.id);
-  if (!vulnId || isNaN(vulnId)) {
+  const vulnId = parseIdParam(req.params.id);
+  if (vulnId === null) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
   }
   try {
@@ -211,8 +211,8 @@ router.get('/:id/explanation', async (req, res) => {
 // PATCH /api/vulnerabilities/:id/status — mark status in active organization
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(vulnStatusSchema), async (req, res) => {
-  const vulnId = Number(req.params.id);
-  if (!vulnId || isNaN(vulnId)) {
+  const vulnId = parseIdParam(req.params.id);
+  if (vulnId === null) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
   }
 
@@ -263,8 +263,8 @@ router.patch('/:id/status', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), val
 // PATCH /api/vulnerabilities/:id/label — explicit ML feedback
 // Write operation: OWNER/ADMIN/DEVELOPER only (Auditor is read-only).
 router.patch('/:id/label', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(vulnLabelSchema), async (req, res) => {
-  const vulnId = Number(req.params.id);
-  if (!vulnId || isNaN(vulnId)) {
+  const vulnId = parseIdParam(req.params.id);
+  if (vulnId === null) {
     return res.status(400).json({ message: 'Invalid vulnerability ID' });
   }
 

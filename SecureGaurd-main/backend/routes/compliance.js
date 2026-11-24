@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { validateBody, complianceGenerateSchema } = require('../utils/validation');
+const { validateBody, complianceGenerateSchema, parseIdParam } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -196,8 +196,8 @@ router.get('/reports', async (req, res) => {
 
 // GET /api/compliance/reports/:id — Fetch single compliance report with org check
 router.get('/reports/:id', async (req, res) => {
-  const reportId = Number(req.params.id);
-  if (!reportId || isNaN(reportId)) {
+  const reportId = parseIdParam(req.params.id);
+  if (reportId === null) {
     return res.status(400).json({ message: 'Invalid report ID' });
   }
 
@@ -227,8 +227,8 @@ router.get('/reports/:id', async (req, res) => {
 
 // GET /api/compliance/reports/:id/pdf — Download PDF report
 router.get('/reports/:id/pdf', async (req, res) => {
-  const reportId = Number(req.params.id);
-  if (!reportId || isNaN(reportId)) {
+  const reportId = parseIdParam(req.params.id);
+  if (reportId === null) {
     return res.status(400).json({ message: 'Invalid report ID' });
   }
 
@@ -266,8 +266,8 @@ router.get('/reports/:id/pdf', async (req, res) => {
 
 // GET /api/compliance/reports/:id/json — Download JSON export
 router.get('/reports/:id/json', async (req, res) => {
-  const reportId = Number(req.params.id);
-  if (!reportId || isNaN(reportId)) {
+  const reportId = parseIdParam(req.params.id);
+  if (reportId === null) {
     return res.status(400).json({ message: 'Invalid report ID' });
   }
 
@@ -301,8 +301,8 @@ router.get('/reports/:id/json', async (req, res) => {
 
 // DELETE /api/compliance/reports/:id — Delete report (OWNER or ADMIN)
 router.delete('/reports/:id', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
-  const reportId = Number(req.params.id);
-  if (!reportId || isNaN(reportId)) {
+  const reportId = parseIdParam(req.params.id);
+  if (reportId === null) {
     return res.status(400).json({ message: 'Invalid report ID' });
   }
 

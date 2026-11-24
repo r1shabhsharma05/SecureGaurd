@@ -10,7 +10,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 const { checkCanTriggerScan } = require('../services/billingService');
 const { fetchPublicSpec, MAX_SPEC_BYTES } = require('../utils/ssrfGuard');
 const { scanAPISpecFile } = require('../utils/apiSpecScanner');
-const { validateBody, validateQuery, scanTriggerSchema, apiSpecSchema, zPagination } = require('../utils/validation');
+const { validateBody, validateQuery, scanTriggerSchema, apiSpecSchema, zPagination, parseIdParam } = require('../utils/validation');
 const { enqueueScan, getQueueStats } = require('../queues/scanQueue');
 const cache = require('../utils/cache');
 // SEC-31: Scan/Vulnerability/Sbom/CustomRule/Repository are RLS tables.
@@ -142,8 +142,8 @@ router.get('/', async (req, res) => {
 // Only TERMINAL scans are cached: queued/running rows change every poll,
 // and a cached "running" would lie to the dashboard's 2 s poller.
 router.get('/:id', async (req, res) => {
-  const scanId = parseInt(req.params.id);
-  if (isNaN(scanId)) return res.status(400).json({ message: 'Invalid scan ID' });
+  const scanId = parseIdParam(req.params.id);
+  if (scanId === null) return res.status(400).json({ message: 'Invalid scan ID' });
 
   try {
     const found = await cache.get(cache.keys.scanDetail(req.organizationId, scanId));

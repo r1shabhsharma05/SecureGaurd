@@ -6,6 +6,7 @@ const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middle
 // SEC-31: Sbom is an RLS table — reads run in a context. createAuditLog
 // self-wraps, so the audit calls below stay as-is.
 const { withRequestOrgContext } = require('../utils/rlsContext');
+const { parseIdParam } = require('../utils/validation');
 
 router.use(authenticateRequest());
 router.use(requireOrgContext);
@@ -48,8 +49,8 @@ router.get('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), asyn
 
 // GET /api/sboms/:id — get single SBOM details with SPDX document
 router.get('/:id', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
-  const sbomId = parseInt(req.params.id);
-  if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
+  const sbomId = parseIdParam(req.params.id);
+  if (sbomId === null) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
     const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
@@ -82,8 +83,8 @@ router.get('/:id', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), a
 
 // GET /api/sboms/:id/download — download valid SPDX 2.3 JSON file
 router.get('/:id/download', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
-  const sbomId = parseInt(req.params.id);
-  if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
+  const sbomId = parseIdParam(req.params.id);
+  if (sbomId === null) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
     const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
@@ -117,8 +118,8 @@ router.get('/:id/download', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDI
 // CycloneDX doc — that is a 404 with an honest message, not a regenerated
 // claim: rescan the repo to get one.
 router.get('/:id/cyclonedx', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
-  const sbomId = parseInt(req.params.id);
-  if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
+  const sbomId = parseIdParam(req.params.id);
+  if (sbomId === null) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
     const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
@@ -153,8 +154,8 @@ router.get('/:id/cyclonedx', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUD
 // one. One component per call keeps this inside NVD's unauthenticated
 // rate limit; the util caches name@version for 24 h and stamps fetchedAt.
 router.get('/:id/threat-intel', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
-  const sbomId = parseInt(req.params.id);
-  if (isNaN(sbomId)) return res.status(400).json({ message: 'Invalid SBOM ID' });
+  const sbomId = parseIdParam(req.params.id);
+  if (sbomId === null) return res.status(400).json({ message: 'Invalid SBOM ID' });
 
   try {
     const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({
@@ -200,8 +201,8 @@ router.get('/:id/threat-intel', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', '
 
 // GET /api/repositories/:id/sbom — get latest SBOM for a repository
 router.get('/repository/:repositoryId', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR']), async (req, res) => {
-  const repositoryId = parseInt(req.params.repositoryId);
-  if (isNaN(repositoryId)) return res.status(400).json({ message: 'Invalid repository ID' });
+  const repositoryId = parseIdParam(req.params.repositoryId);
+  if (repositoryId === null) return res.status(400).json({ message: 'Invalid repository ID' });
 
   try {
     const sbom = await withRequestOrgContext(req, (tx) => tx.sbom.findFirst({

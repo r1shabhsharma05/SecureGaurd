@@ -172,7 +172,7 @@ npm run dev --prefix backend # Express API → http://localhost:5000
 
 ## Current status & known limits
 
-Phase 2+3 is complete (Day 10, 2 Nov 2026). The 20-day transformation program (14 Nov – 3 Dec 2026) is in progress: its Day 7 security gate is **not yet passed** (25 PASS / 14 PARTIAL / 4 FAIL / 3 N/A as of Day 10, 23 Nov — dependency vulnerabilities cleared to zero; the 4 FAILs are owner-gated: git-history purge, tenant RLS policies, backups, Turnstile keys — see [`docs/SECURITY_GATE_REPORT.md`](docs/SECURITY_GATE_REPORT.md)), so Phase 4 product features have not started. The following are **not done** — listed here so nobody mistakes the roadmap for reality:
+Phase 2+3 is complete (Day 10, 2 Nov 2026). The 20-day transformation program (14 Nov – 3 Dec 2026) is in progress: its Day 7 security gate is **not yet passed** (28 PASS / 13 PARTIAL / 2 FAIL / 3 N/A as of Day 11, 24 Nov — Turnstile live, strict id params done, first backup + restore tested; the 2 FAILs are owner-gated: git-history purge, tenant RLS policies — see [`docs/SECURITY_GATE_REPORT.md`](docs/SECURITY_GATE_REPORT.md)), so Phase 4 product features have not started. The following are **not done** — listed here so nobody mistakes the roadmap for reality:
 
 - **Billing (Razorpay) lifecycle is incomplete** — `planPrices` returns null and create-subscription returns 502 on fresh organizations. Test-mode plans exist; the lifecycle is not live.
 - **Mobile layout (~390px) is not verified.**

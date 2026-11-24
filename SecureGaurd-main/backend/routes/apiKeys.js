@@ -5,7 +5,7 @@
 // revoke responses never carry it (only the hash is stored).
 const express = require('express');
 const router = express.Router();
-const { validateBody, createApiKeySchema } = require('../utils/validation');
+const { validateBody, createApiKeySchema, parseIdParam } = require('../utils/validation');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
 const { requireOrgContext, requireOrgRole, createAuditLog } = require('../middleware/rbac');
@@ -80,8 +80,8 @@ router.get('/', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
 
 // DELETE /api/api-keys/:id — revoke (soft: revokedAt, kept for audit).
 router.delete('/:id', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid key id.' });
+  const id = parseIdParam(req.params.id);
+  if (id === null) return res.status(400).json({ message: 'Invalid key id.' });
   try {
     // update() needs a unique where; check org ownership first, then
     // revoke by id (a key from another org 404s instead of leaking).

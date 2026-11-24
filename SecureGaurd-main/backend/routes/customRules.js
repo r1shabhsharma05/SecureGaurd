@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { validateBody, customRuleCreateSchema, customRulePatchSchema, customRuleTestSchema, customRuleTestScanSchema } = require('../utils/validation');
+const { validateBody, customRuleCreateSchema, customRulePatchSchema, customRuleTestSchema, customRuleTestScanSchema, parseIdParam } = require('../utils/validation');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const { Worker } = require('worker_threads');
@@ -131,8 +131,8 @@ router.get('/', async (req, res) => {
 
 // GET /api/custom-rules/:id — one rule (any member).
 router.get('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) return res.status(400).json({ message: 'Invalid rule ID' });
+  const id = parseIdParam(req.params.id);
+  if (id === null) return res.status(400).json({ message: 'Invalid rule ID' });
   try {
     const row = await withRequestOrgContext(req, (tx) => tx.customRule.findFirst({ where: { id, organizationId: req.organizationId } }));
     if (!row) return res.status(404).json({ message: 'Custom rule not found' });
@@ -144,8 +144,8 @@ router.get('/:id', async (req, res) => {
 });
 
 async function loadRule(req, res) {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const id = parseIdParam(req.params.id);
+  if (id === null) {
     res.status(400).json({ message: 'Invalid rule ID' });
     return null;
   }

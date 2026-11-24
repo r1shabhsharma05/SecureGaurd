@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { validateBody, createRepoSchema } = require('../utils/validation');
+const { validateBody, createRepoSchema, parseIdParam } = require('../utils/validation');
 const { execFile } = require('child_process');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
@@ -185,8 +185,8 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(c
 
 // DELETE /api/repos/:id — remove a repository (OWNER or ADMIN only)
 router.delete('/:id', requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
-  const repoId = parseInt(req.params.id);
-  if (isNaN(repoId)) return res.status(400).json({ message: 'Invalid repository ID' });
+  const repoId = parseIdParam(req.params.id);
+  if (repoId === null) return res.status(400).json({ message: 'Invalid repository ID' });
 
   try {
     const repo = await withRequestOrgContext(req, async (tx) => {

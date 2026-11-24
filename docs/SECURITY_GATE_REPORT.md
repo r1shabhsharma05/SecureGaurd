@@ -2,10 +2,14 @@
 
 **Date:** 2026-11-20 (Day 7 of the 20-day program)
 **Verdict: GATE NOT PASSED**
-**Checklist:** `docs/SECURITY_HARDENING_CHECKLIST.md` — 24 PASS / 15 PARTIAL /
-4 FAIL / 0 BLOCKED / 3 NOT APPLICABLE (46 items) — **counts unchanged
-from 16 Nov** (re-verified item by item at `7d471db`; no item crossed
-to PASS, none regressed)
+**Checklist:** `docs/SECURITY_HARDENING_CHECKLIST.md` — 28 PASS / 13 PARTIAL /
+2 FAIL / 0 BLOCKED / 3 NOT APPLICABLE (46 items) — **four items crossed
+since the 24/15/4/3 recount**: SEC-18 + SEC-22 (strict id params, Day 11
+commit `b36b839`), SEC-34 (Turnstile live, commit `1a11ff9`) and SEC-32
+(first backup + trial restore, 24 Nov evening). Count
+note: the Day 11 cron log claimed 27/12/4/3 before SEC-34 closed; the
+arithmetic from the 24/15/4/3 baseline is 27/13/3/3 — the one-item
+discrepancy is for the Day 12 full recount to settle.
 **Commits covered:** everything through `7d471db` (Day 5 `21def6a`,
 Day 6 `4809fa0`, queue/cache `84212d9`, E2E batches `76149f2`/`b8d1ffb`,
 API keys + connect fix `9611676`, dashboard fixes `dce4e57`/`f1527bf`,
@@ -39,8 +43,8 @@ because every FAIL is owner/dashboard-gated, not code-gated:
 | Routes (SEC-16) | 92 | **97** (95 router + 2 server) | 5 new routes since 18 Nov, all behind auth + org context (code-verified). Live matrix still outstanding → PARTIAL stands. |
 | Tests | 75/77 | **147/149** | 2 fails = same pre-existing env failures (compliance: live Postgres; deployment_config: real secrets). 1 regression found + fixed Day 7 (keepalive cron literal). |
 | Secrets history (SEC-03) | 6 FP findings, purge pending | **unchanged** | Gitleaks Day 7: 210 commits, same 6 FPs, 0 real secrets detected; known `e1e3dc9` leak still undetected by default rules; purge not done. |
-| CAPTCHA (SEC-34) | 201 with no token | **unchanged** | Live bundle has widget code, no site key baked in. Keys still unset. |
-| Backups (SEC-32) | none ever | **unchanged** | Script + procedure exist; no backup taken, no restore tested, PITR unverified. |
+| CAPTCHA (SEC-34) | 201 with no token | **PASS 24 Nov** | Widget "SecureGaurd" live; keys set on Render + Vercel (MATCH); backend 400s without a token; live `/signup` renders the widget (`1a11ff9`). |
+| Backups (SEC-32) | none ever | **PASS 24 Nov** | First backup taken (`secureguard-20261124-134015.dump.gz`, 20 tables) + trial restore into local PG 17 passed (row counts matched). PITR still unverified (Free plan has none). |
 
 Live probes Day 7 (read-only): frontend 200 (CSP/HSTS/nosniff/COOP),
 backend `/health` 200 with `db: "up"`, classifier 200
@@ -99,31 +103,38 @@ export-feedback operator path 503s under RLS (no service-role path)
 — design decision still owed before apply. The role creation +
 repoint is a production change — not done unattended.
 
-### SEC-32 — No DB backups ever (FAIL)
-No backup taken, no restore tested.
-**Day 8 evidence (2026-11-21, Supabase dashboard):** PITR check
-done — the project is on the **FREE plan, which includes no
-backups at all** ("Free Plan does not include project backups";
-project overview: "LAST BACKUP: No backups"). PITR is a Pro Plan
-add-on starting at $100/month; Pro itself is $25/month and includes
-7 days of scheduled backups. So there is no dashboard backup to
-verify — the only no-cost route is the scripted `pg_dump` backup.
-Script + procedure ready (`backup-db.sh`, `BACKUP_AND_RESTORE.md`).
-Owner step (pick one): (a) upgrade to Pro ($25/mo, his money call)
-→ scheduled backups exist → restore test; or (b) run `backup-db.sh`
-on a host with `pg_dump` + `DATABASE_URL` (Render shell or laptop —
-this VM has neither) → restore into a disposable DB + row-count
-spot checks. Procedure: `docs/DATABASE_SECURITY.md` §6.2.
+### SEC-32 — Database backups (PASS, closed 2026-11-24)
+First backup taken + trial restore passed. Owner picked the free
+`pg_dump` route, then the postgres-password reset path (dashboard
+reset 19:08 IST, user-chosen password). `pg_dump` 17.12 as the
+`postgres` role over a direct connection — the app role cannot dump
+(RLS blocks pg_dump's COPY/cursor, proven live). Archive
+`backend/backups/secureguard-20261124-134015.dump.gz` (1.6 MB, 0600,
+UNENCRYPTED — no passphrase set yet), manifest lists all 20 public
+tables + data. Trial restore into a local PG 17.12 scratch DB (PGDG
+server, deleted after): with `secureguard_app` created first,
+pg_restore completed with only the benign `schema "public" already
+exists` error; 20/20 tables + 20/20 policies restored; row counts
+matched prod exactly (User 29, Organization 21, Scan 21,
+Vulnerability 122, ApiKey 2, Repository 9). Script fixes landed with
+it (`--schema=public`, `--inserts`, manifest temp-file fix). Full
+record: `docs/BACKUP_AND_RESTORE.md` §2–§3. Remaining gaps (not
+blockers for PASS): archive unencrypted, no recurring schedule yet.
 
-### SEC-34 — CAPTCHA fail-open (FAIL)
-Guard fully built (Turnstile middleware on register /
-forgot-password / contact; CSP allows `challenges.cloudflare.com`;
-widget code in the live bundle) — keys unset, so signup still works
-with no token. Owner step: create the Cloudflare Turnstile widget
-(domain `secureguard-main.vercel.app`) → `TURNSTILE_SECRET_KEY` on
-Render + `VITE_TURNSTILE_SITE_KEY` on Vercel (Production) → redeploy
-both → re-probe must 400 without a token. Do NOT flip the guard to
-fail-closed before the keys exist (repeats the Nov 8 outage).
+### SEC-34 — CAPTCHA (PASS, closed 2026-11-24)
+Cloudflare widget "SecureGaurd" (Managed, hostname
+`secureguard-main.vercel.app`) created; `TURNSTILE_SECRET_KEY` on Render
+(deploy Live 12:24 IST) + `VITE_TURNSTILE_SITE_KEY` on Vercel Production
+(redeploy ready 12:29 IST); site keys verified MATCH character by
+character. Backend enforcement proven by direct POST (`POST
+/api/auth/register`, no token → **400**); register is also blocked
+client-side without a token. The live widget first failed to load —
+root cause was a wrong script URL (`turnstile/api.js` 404s; correct is
+`turnstile/v0/api.js`), fixed in one line (`1a11ff9`, pushed on his
+word). Live probe after deploy: `/signup` renders the "Verify you are
+human" checkbox, no error. Note: `/login` has no Turnstile guard by
+design (rate-limited); the guard covers register / forgot-password /
+contact only.
 
 ---
 
@@ -139,9 +150,6 @@ fail-closed before the keys exist (repeats the Nov 8 outage).
 - **SEC-15 / SEC-16:** live cross-tenant matrix outstanding (needs 2
   mailboxes). Code evidence is strong (97 routes classified, 0 bare
   tenant accesses, IDOR 404s) but the gate rule requires live proof.
-- **SEC-18 / SEC-22:** shared zod validator on 9 of 48 mutating
-  routes (Day 6 wired the 6 auth routes). Remaining 39 have inline
-  validation; the gap is consistency, tracked for Day 8+.
 - **SEC-17:** live 429 proof still inconclusive (rotating egress IP
   on this VM; limiter proven mounted in-process, Day 6 test).
 - **SEC-33:** retention rules + purge script (no-RLS tables only);
@@ -318,3 +326,65 @@ classifier-copy deletion approval (SEC-06), 2 mailboxes for the
 live matrix. Day 11 (24 Nov) must re-check the gate first; if it
 still fails, Day 11 work stays limited to gate-clearing support —
 no new product features.
+
+## Day 11 re-check + SEC-34 close-out (2026-11-24) — still NOT PASSED (three items crossed)
+
+Counts: **27 PASS / 13 PARTIAL / 3 FAIL / 0 BLOCKED / 3 N/A**.
+SEC-18 + SEC-22 crossed to PASS (strict id params) and SEC-34 crossed
+to PASS (Turnstile live); nothing regressed. The 3 FAILs stand, so
+Phase 4 (Day 11 real AI remediation) did **not** start; Day 11 work
+was gate-clearing support only. **Same evening, SEC-32 also closed**
+(first backup + trial restore passed — see the SEC-32 section above);
+counts moved to **28 PASS / 13 PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A**,
+remaining FAILs SEC-03 + SEC-31.
+
+- **SEC-18 / SEC-22 → PASS (commit `b36b839` "strict id params, no
+  parseint coercion", 11 files):** route-by-route audit of the Day 10
+  "19 inline routes" gap showed every body-bearing mutating route
+  already runs shared `validateBody` — the real hole was id-param
+  coercion (`parseInt("12abc")` → 12, `Number("12.5")` → 12.5).
+  `parseIdParam` added to `backend/utils/validation.js` (digits-only
+  safe positive int, else null), wired at **25 sites across 10 files**
+  (16 `parseInt` + 8 `Number` path params + the `?scanId=` filter),
+  each route keeping its 400 message; `grep parseInt(req.params|
+  Number(req.params` after: no leftovers. New
+  `backend/tests/validationParams.test.js` **4/4**; full backend suite
+  **167/169** (same 2 env failures); RLS 63/0; frontend build green;
+  secret-scan of the diff clean. Recovery note: the Day 11 cron's
+  code was wiped the same day by a mistaken `git reset --hard` on a
+  dirty tree (see `MEMORY.md` 2026-11-24) and re-applied + re-verified
+  from the run log + manifest + surviving test file, same commit
+  message, same 11 files. Lesson recorded: never `reset --hard` on a
+  dirty tree.
+- **SEC-34 → PASS (commit `1a11ff9` "update turnstile script url"):**
+  see the SEC-34 section above — keys set + MATCH verified, backend
+  400 proven by direct POST, live widget renders on `/signup`.
+- **SEC-32 (backups) — owner route picked (free `pg_dump`), execution
+  first BLOCKED on an RLS interaction, then CLOSED the same evening:**
+  pg 17.12 client home-installed on the VM (prod is Postgres 17.6);
+  `backup-db.sh` fixed to `--schema=public` (app role cannot lock
+  Supabase-managed schemas) + `--inserts` — but `pg_dump` still
+  aborted: its COPY and its cursor DECLARE both fail with "query
+  would be affected by row-level security policy", while plain SELECT,
+  COPY (SELECT) and DECLARE CURSOR all work as the same role in psql
+  (policies verified: 20× PERMISSIVE ALL TO `secureguard_app`).
+  Session-mode pooler `:6543` is closed. Owner then picked the
+  postgres-password reset path: dashboard reset 19:08 IST
+  (user-chosen password), `pg_dump` as `postgres` over a direct
+  connection worked — archive `secureguard-20261124-134015.dump.gz`
+  (1.6 MB, 20 tables, manifest verified) + trial restore into a local
+  PG 17 scratch DB passed (row counts matched on all spot-checked
+  tables). See the SEC-32 section above + `docs/BACKUP_AND_RESTORE.md`
+  §2–§3. Archive is UNENCRYPTED (no passphrase yet) and no recurring
+  schedule exists yet.
+- **Gate rule reminder:** the Day 11 cron log claimed 27/12/4/3 before
+  SEC-34 closed; the arithmetic from the 24/15/4/3 baseline is
+  27/13/3/3 — the one-item discrepancy is for the Day 12 full recount
+  to settle.
+
+Still blocked on the owner: history-rewrite word + Atlas MFA code
+(SEC-03), SEC-31 Step E decisions, classifier-copy deletion approval
+(SEC-06), 2 mailboxes for the live matrix. Day 12 (25 Nov) must push
+the Day 11 code commit first (verify HEAD, verify commit + SHAs),
+then re-check the gate; if it still fails, Day 12 work stays limited
+to gate-clearing support.

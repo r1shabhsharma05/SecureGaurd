@@ -4,8 +4,19 @@
 not recorded anywhere in the repo until 2026-11-16 — it is now, so future
 checks can identify the project without guessing from the Render URL.
 
-**Status, stated honestly (16 Nov 2026, Day 3 Unit G re-check):** still
-**no backup has ever been taken and no trial restore has been performed.**
+**Status (24 Nov 2026, ~19:11 IST): FIRST BACKUP TAKEN.** Archive
+`backend/backups/secureguard-20261124-134015.dump.gz` (1.6 MB, 0600,
+UNENCRYPTED — no passphrase set yet), manifest lists all **20 public
+tables** + their data (20 TABLE + 20 TABLE DATA entries). Dumped as the
+`postgres` role (direct connection) after a dashboard password reset
+the same evening — the app role cannot dump (RLS blocks pg_dump's
+COPY/cursor). Script fixes landed with it: `--schema=public` +
+`--inserts` (app-role failures) and the manifest step (pg_restore does
+NOT read from stdin — decompress to a temp file first; same fix applied
+to the §3 restore command below). `_prisma_migrations` is NOT in the
+archive — the table does not exist in prod (schema was synced without
+migration history). **Trial restore still pending** — SEC-32 stays FAIL
+until §3 passes.
 Supabase automated backups / PITR remain **UNVERIFIED**: the Management
 API was checked read-only on 2026-11-16 and returned **403 Forbidden**
 for both `GET /v1/projects/wkvvxqlflhjiqkhwxrsl` and
@@ -68,11 +79,12 @@ backups are confirmed; weekly at minimum after that.
 
 1. Create a scratch database: a fresh Supabase project, or a local Postgres
    (`createdb secureguard_restore`).
-2. Restore. `pg_restore` cannot read gzip, so decompress first and pipe the
-   custom-format dump into `pg_restore` on stdin (`-`):
+2. Restore. `pg_restore` cannot read an archive from stdin (it treats
+   `-` as a literal filename), so decompress to a temp file first:
    ```bash
-   gzip -dc ~/secureguard-backups/secureguard-<timestamp>.dump.gz \
-     | pg_restore --dbname='<SCRATCH DATABASE_URL>' --no-owner --no-privileges -
+   gzip -dc ~/secureguard-backups/secureguard-<timestamp>.dump.gz > /tmp/sg-restore.dump
+   pg_restore --dbname='<SCRATCH DATABASE_URL>' --no-owner --no-privileges /tmp/sg-restore.dump
+   rm -f /tmp/sg-restore.dump
    ```
    For an encrypted archive (`.dump.gz.enc`), decrypt first, then
    decompress — the passphrase is passed via the environment, never on the
@@ -80,13 +92,34 @@ backups are confirmed; weekly at minimum after that.
    ```bash
    openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_PASSPHRASE \
      -in ~/secureguard-backups/secureguard-<timestamp>.dump.gz.enc \
-     | gzip -dc \
-     | pg_restore --dbname='<SCRATCH DATABASE_URL>' --no-owner --no-privileges -
+     | gzip -dc > /tmp/sg-restore.dump
+   pg_restore --dbname='<SCRATCH DATABASE_URL>' --no-owner --no-privileges /tmp/sg-restore.dump
+   rm -f /tmp/sg-restore.dump
    ```
 3. Point a local backend copy at the scratch URL and run the smoke checks:
    `GET /health` → 200; register a throwaway account; create an organization;
    list organizations. All three must work against the restored data.
 4. Delete the scratch database when done. Record the trial date + result here.
+
+**Trial restore PASSED — 2026-11-24 ~19:15 IST (first backup,
+`secureguard-20261124-134015.dump.gz`):** scratch DB was a local
+PostgreSQL 17.12 from PGDG debs (home-installed server binaries, run
+as `nobody` from /tmp; deleted after). Two gotchas recorded for the
+next restore: (1) create the `secureguard_app` role first
+(`CREATE ROLE secureguard_app NOLOGIN`) — the dump contains the 20
+permissive RLS policies naming that role, and without it pg_restore
+logs 20 errors; (2) the single remaining error, `schema "public"
+already exists`, is benign (every fresh DB already has a public
+schema). With the role present: pg_restore completed, 20/20 tables +
+20/20 policies restored, row counts matched prod exactly on all
+spot-checked tables (User 29, Organization 21, Scan 21,
+Vulnerability 122, ApiKey 2, Repository 9). Scratch DB + server
+deleted after the check. **SEC-32 → PASS on this evidence.**
+Remaining gaps (not blockers for PASS): the archive is UNENCRYPTED
+(no `BACKUP_ENCRYPTION_PASSPHRASE` yet — set one, store it as a
+Render env var, re-run for an encrypted archive); no recurring
+schedule yet (suggested: daily until Supabase automated backups are
+confirmed, weekly after).
 
 ## 4. Real restore (incident only)
 
@@ -124,7 +157,7 @@ the production database in an unknown state with no clean rollback.
 ## 5. RLS apply + verification (SEC-31)
 
 Migration `backend/prisma/migrations/20261116_rls_policies/migration.sql`
-(16 policies on 13 tenant tables, `app.current_org_id` /
+(17 policies on 14 tenant tables, `app.current_org_id` /
 `app.current_user_id` session variables, AuditLog append-only trigger) is
 written and validated offline against real PostgreSQL 17.5 (PGlite, 42/42
 checks: cross-org reads 0 rows, unset-variable reads 0 rows, same-org

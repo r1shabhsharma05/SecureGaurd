@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { validateBody, orgNameSchema, memberRoleSchema, transferOwnershipSchema, inviteMemberSchema } = require('../utils/validation');
+const { validateBody, orgNameSchema, memberRoleSchema, transferOwnershipSchema, inviteMemberSchema, parseIdParam } = require('../utils/validation');
 const crypto = require('crypto');
 const prisma = require('../prismaClient');
 const authMiddleware = require('../middleware/auth');
@@ -300,10 +300,10 @@ router.get('/:organizationId/members', requireOrgContext, async (req, res) => {
 
 // ── PATCH /api/organizations/:id/members/:memberId — Update member role ────
 router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), validateBody(memberRoleSchema), async (req, res) => {
-  const targetMemberId = parseInt(req.params.memberId);
+  const targetMemberId = parseIdParam(req.params.memberId);
   const { role } = req.body;
 
-  if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
+  if (targetMemberId === null) return res.status(400).json({ message: 'Invalid member ID' });
   if (!['OWNER', 'ADMIN', 'DEVELOPER', 'AUDITOR'].includes(role)) {
     return res.status(400).json({ message: 'Invalid role. Must be OWNER, ADMIN, DEVELOPER, or AUDITOR' });
   }
@@ -401,8 +401,8 @@ router.patch('/:organizationId/members/:memberId', requireOrgContext, requireOrg
 
 // ── DELETE /api/organizations/:id/members/:memberId — Remove member ────────
 router.delete('/:organizationId/members/:memberId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
-  const targetMemberId = parseInt(req.params.memberId);
-  if (isNaN(targetMemberId)) return res.status(400).json({ message: 'Invalid member ID' });
+  const targetMemberId = parseIdParam(req.params.memberId);
+  if (targetMemberId === null) return res.status(400).json({ message: 'Invalid member ID' });
 
   try {
     const lookup = await withRequestOrgContext(req, async (tx) => {
@@ -795,8 +795,8 @@ router.get('/:organizationId/invitations', requireOrgContext, requireOrgRole(['O
 
 // ── DELETE /api/organizations/:id/invitations/:invitationId — Revoke ───────
 router.delete('/:organizationId/invitations/:invitationId', requireOrgContext, requireOrgRole(['OWNER', 'ADMIN']), async (req, res) => {
-  const invId = parseInt(req.params.invitationId);
-  if (isNaN(invId)) return res.status(400).json({ message: 'Invalid invitation ID' });
+  const invId = parseIdParam(req.params.invitationId);
+  if (invId === null) return res.status(400).json({ message: 'Invalid invitation ID' });
 
   try {
     const inv = await withRequestOrgContext(req, async (tx) => {
