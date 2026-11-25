@@ -459,3 +459,52 @@ export-feedback 503 design), classifier-copy deletion approval
 (SEC-06), 2 mailboxes for the live matrix. Day 13 (26 Nov) re-checks
 the gate first; if it still fails, Day 13 work stays limited to
 gate-clearing support — no Phase 4 features.
+
+## Day 13 re-check + background architecture audit (2026-11-26) — still NOT PASSED
+
+Counts: **29 PASS / 12 PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A**
+(unchanged). No item crossed; nothing regressed. Remote HEAD
+`7a80d45` (Day 12) == local HEAD — no commits since Day 12, no owner
+decisions since Day 12. Phase 4 (Day 13 background architecture)
+did **not** start; Day 13 work was a read-only audit of the Day 13
+scope, `docs/BACKGROUND_ARCHITECTURE_AUDIT.md`.
+
+- **Fresh evidence (base `7a80d45`):** live probes — frontend 200
+  (full landing render), backend `/health`
+  `{"status":"ok","db":"up"}`, classifier `model_loaded: true`
+  v2.2.1 / `v3_real` (after ~60 s Render cold start).
+- **Run limitation (stated plainly):** no local test, build, OSV or
+  Gitleaks run happened this turn — the local clone content failed an
+  execution-risk check at run start, so no git/npm command ran inside
+  it. Test counts cited in the audit are Day 12's fresh evidence
+  (25 Nov: backend suite 167/169, OSV 589 packages / 0 vulnerable,
+  RLS 63 files / 0 bare, Gitleaks 6 findings identical to 20 Nov)
+  and the existing load-test doc — labelled as such, not re-measured
+  today. Counts are unchanged because nothing changed.
+- **Day 13 audit — `docs/BACKGROUND_ARCHITECTURE_AUDIT.md`:**
+  the queue/worker architecture built 19 Nov is real: BullMQ +
+  Redis with an in-process FIFO fallback, concurrency 2, persistent
+  worker-thread pool with a 10-minute stuck-thread kill, honest
+  failure marking (no blind retries), SSRF-guarded shallow clones,
+  org-scoped Redis cache, graceful-shutdown hooks. Seven gaps found,
+  all still open, none built (gate-blocked): **G1** no stale-scan
+  reaper (orphaned `queued`/`running` rows); **G2** no scan
+  cancellation; **G3** no per-org queue fairness; **G4** no clone
+  size / disk guard and no orphan temp-dir sweep; **G5** the inline
+  scan fallback has no timeout; **G6** shutdown terminates worker
+  threads instead of draining; **G7** no clone-only retry and no
+  trigger idempotency key. Post-gate build order recorded in the
+  audit (G1 → G5 → G2 → G4 → G6 → G3 → G7).
+- **Production queue mode UNVERIFIED:** `render.yaml` says
+  `REDIS_URL` is an owner step (until set, production runs the
+  in-process fallback), while the Day 7 report states BullMQ live.
+  `GET /api/scans/queue/stats` needs an authenticated session and
+  no probe credentials were available this run, so the mode is not
+  claimed either way in the audit.
+
+Still blocked on the owner: history-rewrite word + Atlas MFA code
+(SEC-03), SEC-31 Step E decisions (backup-first, extra tables,
+export-feedback 503 design), classifier-copy deletion approval
+(SEC-06), 2 mailboxes for the live matrix. Day 14 (27 Nov) re-checks
+the gate first; if it still fails, Day 14 work stays limited to
+gate-clearing support — no Phase 4 features.
