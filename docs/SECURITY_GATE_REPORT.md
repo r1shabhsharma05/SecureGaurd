@@ -508,3 +508,48 @@ export-feedback 503 design), classifier-copy deletion approval
 (SEC-06), 2 mailboxes for the live matrix. Day 14 (27 Nov) re-checks
 the gate first; if it still fails, Day 14 work stays limited to
 gate-clearing support — no Phase 4 features.
+
+## Day 14 re-check + dashboard/UX audit (2026-11-27) — still NOT PASSED
+
+Counts: **29 PASS / 12 PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A**
+(unchanged). No item crossed; nothing regressed. Remote HEAD
+`9d9593f` (Day 13) — no commits since Day 13, no owner decisions
+since Day 13. Phase 4 (Day 14 dashboard + UX) did **not** start;
+Day 14 work was a read-only audit of the Day 14 scope,
+`docs/DASHBOARD_UX_AUDIT.md`.
+
+- **Fresh evidence (base `9d9593f`):** live probes — frontend 200,
+  backend `/health` `{"status":"ok","db":"up"}`, classifier
+  `model_loaded: true` v2.2.1 / `v3_real` (after a Render cold start).
+- **Run limitation (stated plainly):** no local test, build, OSV or
+  Gitleaks run happened this turn — the local clone content failed an
+  execution-risk check at run start, so no git/npm command ran inside
+  it. Test counts cited in the audit are Day 12's fresh evidence
+  (25 Nov) and the existing load-test doc — labelled as such, not
+  re-measured today. Counts are unchanged because nothing changed.
+- **Day 14 audit — `docs/DASHBOARD_UX_AUDIT.md`:** screenshot 04's
+  20 UX patterns checked against the dashboard at `9d9593f` —
+  **9 PRESENT / 2 PARTIAL / 9 MISSING**. Present: skeleton loaders,
+  persistent sidebar, loading/empty states, smart form validation,
+  advanced filtering, onboarding, custom 404, mobile layouts
+  (code-verified), destructive-action protection. Partial: reusable
+  data table (3 hand-rolled tables, no shared component), graceful
+  error recovery (ErrorBoundary logs locally only, no tracking
+  service). Missing: optimistic UI, command palette, autosave,
+  debouncing, throttling, bulk actions on findings, keyboard
+  shortcuts, tier-based UI indicator, referral/affiliate pages.
+  Dashboard scope also verified from real data: Health Score stats,
+  25/page findings with filters, feature-flagged AI-priority ranker
+  (off by default), scan-history tab, org settings/API keys. None of
+  it built (gate-blocked); post-gate build order recorded in the
+  audit (debounce → bulk actions → shared table → shortcuts →
+  palette → optimistic UI → autosave → tier indicator → throttling
+  → referral). Live dashboard interaction was not probed (no
+  credentials) — code-based audit only.
+
+Still blocked on the owner: history-rewrite word + Atlas MFA code
+(SEC-03), SEC-31 Step E decisions (backup-first, extra tables,
+export-feedback 503 design), classifier-copy deletion approval
+(SEC-06), 2 mailboxes for the live matrix. Day 15 (28 Nov) re-checks
+the gate first; if it still fails, Day 15 work stays limited to
+gate-clearing support — no Phase 4 features.
