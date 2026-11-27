@@ -553,3 +553,64 @@ export-feedback 503 design), classifier-copy deletion approval
 (SEC-06), 2 mailboxes for the live matrix. Day 15 (28 Nov) re-checks
 the gate first; if it still fails, Day 15 work stays limited to
 gate-clearing support — no Phase 4 features.
+
+## Day 15 re-check + enterprise audit (2026-11-28) — still NOT PASSED
+
+Counts: **29 PASS / 12 PARTIAL / 2 FAIL / 0 BLOCKED / 3 N/A**
+(unchanged). No item crossed; nothing regressed. Remote HEAD
+`f1778435` (Day 14) — no commits since Day 14, no owner decisions
+since Day 14. Phase 4 (Day 15 enterprise completion) did **not**
+start; Day 15 work was a read-only audit of the Day 15 scope,
+`docs/ENTERPRISE_AUDIT.md`.
+
+- **Fresh evidence (base `f1778435`):** live probes — frontend 200,
+  backend `/health` `{"status":"ok","db":"up"}`, classifier
+  `model_loaded: true` v2.2.1 / `v3_real`; OAuth providers live =
+  google + github (GitLab absent); billing usage + audit-logs
+  unauthenticated → 401; billing webhook without signature → 400.
+- **Run limitation (stated plainly):** no local test, build, OSV or
+  Gitleaks run happened this turn — the local clone content failed an
+  execution-risk check at run start, so no git/npm command ran inside
+  it. Test counts cited in the audit are Day 12's fresh evidence
+  (25 Nov: backend suite 167/169, OSV 589 packages / 0 vulnerable,
+  RLS 63 files / 0 bare, Gitleaks 6 findings identical to 20 Nov)
+  and the existing load-test doc — labelled as such, not re-measured
+  today. The unauthenticated GitHub REST API is rate-limited from
+  this VM (0/60), so the Days 13/14 "docs-only" basis is those runs'
+  manifests and run logs, not a fresh API diff. Counts are unchanged
+  because nothing changed.
+- **Day 15 audit — `docs/ENTERPRISE_AUDIT.md`:** RBAC, SSO, billing,
+  invitations, audit logs, compliance and notifications checked
+  against the code at `f1778435` + the live probes above. **RBAC
+  PRESENT** (4 roles, AUDITOR read-only, org-context + role gates,
+  server-validated role grants; caveat: tenancy still app-level only
+  — SEC-31). **SSO PRESENT with gaps** (Google + GitHub live via
+  PKCE; GitLab code-only 501; SAML not implemented, honest 501;
+  MFA absent — SEC-07 PARTIAL; no SCIM). **Billing PRESENT with
+  gaps** (Razorpay test-mode verified; webhook HMAC + idempotency +
+  event ordering; repo/member/scan limits enforced at every sink;
+  Stripe NOT implemented — schema columns only, no SDK/webhook/
+  cancel helper, org delete fails closed on a live Stripe sub; live
+  billing blocked on owner KYC). **Invitations PRESENT with 1 new
+  live defect F1** — invite inspect 500s on an invalid token
+  (probed twice today; expected 404; accept flow itself is sound:
+  email-bound, single-use claim, expiry, member-limit sink check).
+  **Audit logs PRESENT with gaps** (auth + privileged actions
+  logged, OWNER/ADMIN org-scoped reads, UI tab; retention undecided
+  — SEC-33). **Compliance PRESENT** (SOC2/HIPAA/PCI-DSS/GDPR from
+  real findings, PDF/JSON export; score is self-assessed, not a
+  certification). **Notifications PRESENT, partial** (Slack encrypted
+  + masked + validated, email via Brevo, real test endpoints,
+  AlertLog delivery ledger; no in-app notification centre). None of
+  the post-gate build order is built (F1 fix → MFA → SAML → Stripe
+  decision → retention job → in-app notifications).
+- **F1 does not change the gate counts:** no checklist item maps to
+  the invite-inspect error shape. It is recorded as a post-gate fix
+  in the audit.
+
+Still blocked on the owner: history-rewrite word + Atlas MFA code
+(SEC-03), SEC-31 Step E decisions (backup-first, extra tables,
+export-feedback 503 design), classifier-copy deletion approval
+(SEC-06), 2 mailboxes for the live matrix. Day 16 (29 Nov) re-checks
+the gate first; if it still fails, Day 16 work stays limited to
+gate-clearing support — no Phase 4 features.
