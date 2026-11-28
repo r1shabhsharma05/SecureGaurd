@@ -14,6 +14,7 @@ const { withRequestOrgContext, setOrgContext } = require('../utils/rlsContext');
 const { checkCanAddRepository } = require('../services/billingService');
 const { getPlanConfig } = require('../config/plans');
 const { generateWebhookSecret } = require('./integration');
+const { isAllowedRepoHost } = require('../utils/repoScanSource');
 
 // Remote git URLs only: https://, http://, git://, or ssh git@host:path.
 // Anything else (notably a server-local filesystem path) is rejected here
@@ -32,6 +33,9 @@ const MAX_REPO_NAME_LENGTH = 100;
 // scanner clones; non-HTTP(S) URLs were already rejected above.
 function checkRepoReachable(rawUrl) {
   return new Promise((resolve) => {
+    // Backstop (the POST handler gates first, with a distinct 400): the
+    // probe must never run against a non-allowlisted host, whoever calls it.
+    if (!isAllowedRepoHost(rawUrl)) return resolve(false);
     let url = rawUrl.trim();
     const sshMatch = url.match(/^git@([^:]+):(.+)$/);
     if (sshMatch) url = `https://${sshMatch[1]}/${sshMatch[2]}`;
@@ -79,6 +83,13 @@ router.post('/', requireOrgRole(['OWNER', 'ADMIN', 'DEVELOPER']), validateBody(c
   }
   if (!REMOTE_GIT_URL_RE.test(trimmedUrl)) {
     return res.status(400).json({ message: 'url must be a remote git URL (https://, http://, git://, or git@host:path)' });
+  }
+  // F-02: only the hosts the scanner can clone (github.com, gitlab.com,
+  // plus EXTRA_GIT_HOSTS) may be probed — localhost, private IPs, raw
+  // IPs, other hosts and non-standard ports are rejected here, before
+  // any network call, so the probe can never become an SSRF oracle.
+  if (!isAllowedRepoHost(trimmedUrl)) {
+    return res.status(400).json({ message: 'repository host is not allowlisted — only github.com and gitlab.com (plus EXTRA_GIT_HOSTS) are accepted' });
   }
   if (!(await checkRepoReachable(trimmedUrl))) {
     return res.status(400).json({ message: 'repository URL is not reachable (git ls-remote found no such public repository). Connect a public repository URL.' });

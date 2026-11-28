@@ -27,6 +27,13 @@ try {
 
 const MIGRATION = path.join(__dirname, '..', 'prisma', 'migrations', '20261116_rls_policies', 'migration.sql');
 
+// F-03/F-04 (ARTEX 28 Nov 2026): the §5 resolver bundle was never
+// applied in prod, so the functions were absent and every unauthenticated
+// resolver call raised instead of returning NULL. This tracked migration
+// carries the same NULL-on-miss definitions into the normal migrate
+// chain; it must apply cleanly over §5 and keep the same behaviour.
+const RESOLVER_MIGRATION = path.join(__dirname, '..', 'prisma', 'migrations', '20261128_resolver_null_on_miss', 'migration.sql');
+
 const STUBS = `
 CREATE TABLE "User" (id serial PRIMARY KEY, email text);
 CREATE TABLE "Organization" (id serial PRIMARY KEY, name text);
@@ -226,4 +233,30 @@ test('razorpay + repository resolvers', async () => {
   assert.equal(repo.usr, 1);
   const miss = await one(`SELECT app_org_id_for_repository($1, $2) AS org`, ['acme/web', 'GITLAB']);
   assert.equal(miss.org, null);
+});
+
+test('resolver migration 20261128 applies over §5: NULL on miss, ids on hit', async (t) => {
+  if (!fs.existsSync(RESOLVER_MIGRATION)) {
+    t.skip('resolver migration file not present');
+    return;
+  }
+  await db.exec(fs.readFileSync(RESOLVER_MIGRATION, 'utf8'));
+  const one = async (fn, arg) => (await asApp({ org: 1, user: 1 }, `SELECT ${fn}($1) AS id`, [arg]))[0].id;
+  // Invitation resolvers: hit + miss (the F-04 shape — a real token and
+  // an unknown one must never raise).
+  assert.equal(await one('app_org_id_for_invitation', 'aaa'), 1);
+  assert.equal(await one('app_org_id_for_invitation', 'zzz'), null);
+  assert.equal(await one('app_org_id_for_invitation_any', 'bbb'), 1);
+  assert.equal(await one('app_org_id_for_invitation_any', 'zzz'), null);
+  // Repository resolvers: hit + miss (the F-03 webhook shape).
+  const repo = await asApp({ org: 1, user: 1 },
+    `SELECT app_org_id_for_repository($1, $2) AS org, app_user_id_for_repository($1, $2) AS usr`,
+    ['acme/web', 'GITHUB']);
+  assert.equal(repo[0].org, 1);
+  assert.equal(repo[0].usr, 1);
+  const miss = await asApp({ org: 1, user: 1 },
+    `SELECT app_org_id_for_repository($1, $2) AS org, app_user_id_for_repository($1, $2) AS usr`,
+    ['nobody/nothing', 'GITHUB']);
+  assert.equal(miss[0].org, null);
+  assert.equal(miss[0].usr, null);
 });

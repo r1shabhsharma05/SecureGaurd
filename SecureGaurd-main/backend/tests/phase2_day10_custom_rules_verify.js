@@ -73,6 +73,19 @@ cweId: CWE-95
   await rejects('reject bad CWE', VALID_YAML.replace('CWE-95', 'CWE95'), /cweId must/);
   await rejects('reject empty YAML', '', /yaml is required/);
 
+  // F-01 (ARTEX 28 Nov 2026): equal-length overlapping alternatives
+  // backtrack catastrophically — (a|a)+$ took ~4x per +2 chars locally
+  // (n=28 ≈ 7.9 s per line). The guard used to reject only strictly
+  // longer prefixes, so (a|a)+ passed; it must fail closed now.
+  await rejects('reject equal-length overlapping alternatives (a|a)+$', VALID_YAML.replace(/pattern:.*/, () => "pattern: '(a|a)+$'"), /nested quantifier/);
+  await rejects('reject equal-length overlapping alternatives (a|a)*$', VALID_YAML.replace(/pattern:.*/, () => "pattern: '(a|a)*$'"), /nested quantifier/);
+  await rejects('reject equal-length overlapping alternatives (ab|ab)+', VALID_YAML.replace(/pattern:.*/, "pattern: '(ab|ab)+'"), /nested quantifier/);
+  await rejects('reject overlapping alternatives (a|ab)+ (pre-existing)', VALID_YAML.replace(/pattern:.*/, "pattern: '(a|ab)+'"), /nested quantifier/);
+  await test('accept non-overlapping alternatives (foo|bar)+', () => {
+    const r = parseCustomRuleYaml(VALID_YAML.replace(/pattern:.*/, "pattern: '(foo|bar)+'"));
+    assert.strictEqual(r.pattern, '(foo|bar)+');
+  });
+
   await test('match: fires on matching file+line, skips others', () => {
     const [c] = compileCustomRules([parseCustomRuleYaml(VALID_YAML)]);
     const hits = matchCustomRules([c], 'app.js', '  eval(req.body.code);', 7);

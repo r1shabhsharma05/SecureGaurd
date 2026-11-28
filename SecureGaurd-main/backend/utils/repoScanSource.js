@@ -87,6 +87,31 @@ function lookupHostAddresses(hostname) {
 // resolves could change between validation and the clone. The host
 // allowlist is what bounds that residual rebinding risk: only
 // github.com/gitlab.com (plus EXTRA_GIT_HOSTS) can ever be reached.
+
+// Host allowlist check shared by the clone path and the repo-connect
+// reachability probe (F-02, ARTEX 28 Nov 2026): POST /api/repos used to
+// run `git ls-remote` against ANY host, so a loopback/private/arbitrary
+// URL became a blind SSRF oracle. The probe must never touch a host
+// outside this set. Pure string/URL parsing — no DNS, no network — so a
+// rejected URL is refused before any connection attempt. SSH remotes
+// (git@host:path) are judged by their host, exactly as the clone path
+// normalizes them; non-default ports and embedded credentials are
+// rejected even on an allowlisted host.
+function isAllowedRepoHost(rawUrl) {
+  let url = (rawUrl || '').trim();
+  const sshMatch = url.match(/^git@([^:]+):(.+)$/);
+  if (sshMatch) url = `https://${sshMatch[1]}/${sshMatch[2]}`;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (!['http:', 'https:', 'git:'].includes(parsed.protocol)) return false;
+  if (parsed.username || parsed.password) return false;
+  if (parsed.port) return false; // explicit non-default port
+  return ALLOWED_CLONE_HOSTS.has(parsed.hostname.toLowerCase());
+}
 function validateCloneUrl(url) {
   let parsed;
   try {
@@ -154,4 +179,4 @@ function resolveScanTarget(repo, options = {}) {
   };
 }
 
-module.exports = { resolveScanTarget };
+module.exports = { resolveScanTarget, isAllowedRepoHost, ALLOWED_CLONE_HOSTS };

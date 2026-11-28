@@ -67,7 +67,8 @@ function asText(value, field, { min = 1, max = 2000, required = true } = {}) {
  * Structural nested-quantifier check (write-time ReDoS guard). Rejects a
  * quantified group whose content ends in a quantified atom — (a+)+, (a*)*,
  * ((a+))+, ([\w]+)+ — or whose top-level alternatives overlap so one
- * branch is a literal prefix of another — (a|ab)+, (ab|a)+. Either shape
+ * branch is a literal prefix of another — (a|ab)+, (ab|a)+, or an
+ * equal-length duplicate such as (a|a)+. Either shape
  * can backtrack exponentially on a non-matching input (e.g. (a+)+$ against
  * 'a'*30 + '!'). This is structural, not a timing check: it runs before
  * the pattern is stored, so it cannot be evaded by input size, and it
@@ -105,7 +106,7 @@ function literalPrefix(branchText) {
 
 function assertSafePattern(source, field) {
   const failMsg = `${field} uses a nested quantifier that can backtrack catastrophically `
-    + '(e.g. (a+)+, (a*)* or (a|ab)+) — rewrite the pattern without a quantified group '
+    + '(e.g. (a+)+, (a*)*, (a|ab)+ or (a|a)+) — rewrite the pattern without a quantified group '
     + 'containing a quantified atom or overlapping alternatives';
   // closeInfo: index of ')' -> { branches: [{ text, endsQuantified }], quantified }
   const closeInfo = new Map();
@@ -176,7 +177,10 @@ function assertSafePattern(source, field) {
           const prefixes = info.branches.map((b) => literalPrefix(b.text)).filter(Boolean);
           for (let a = 0; a < prefixes.length; a++) {
             for (let b = 0; b < prefixes.length; b++) {
-              if (a !== b && prefixes[b].startsWith(prefixes[a]) && prefixes[b].length > prefixes[a].length) {
+              // One branch a prefix of another — including an equal-length
+              // duplicate ((a|a)+): identical prefixes backtrack just as
+              // catastrophically as (a|ab)+, so >=, not >.
+              if (a !== b && prefixes[b].startsWith(prefixes[a]) && prefixes[b].length >= prefixes[a].length) {
                 fail(failMsg);
               }
             }

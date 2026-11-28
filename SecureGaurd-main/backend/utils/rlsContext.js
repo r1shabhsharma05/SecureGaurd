@@ -189,6 +189,24 @@ function createRlsContext(client) {
   // caller's transaction and returns an integer id or null. The caller
   // then re-enters withOrgContext with the resolved id; these functions
   // never return row contents.
+  //
+  // F-03/F-04 (ARTEX 28 Nov 2026): the resolvers run on unauthenticated
+  // paths (invitation inspect/accept, webhooks), and the SQL functions
+  // return NULL on no match — but if a function is missing (the §5
+  // bundle was never applied in prod) or the query fails any other way,
+  // the throw used to bubble to the handler's catch-all as a 500, for
+  // unknown AND real tokens alike. A lookup-by-secret that errors must
+  // read as "unknown" (null → the handler's documented 404/401), never
+  // as a 500. Log it so a missing function is visible in server logs.
+  async function nullOnResolverError(fn, label) {
+    try {
+      return await fn();
+    } catch (err) {
+      console.error(`${label} failed, treating as unknown:`, err.message);
+      return null;
+    }
+  }
+
   async function resolveOrgIdForInvitation(tx, tokenHash) {
     if (typeof tokenHash !== 'string' || tokenHash.length === 0) return null;
     const rows = await tx.$queryRaw`SELECT app_org_id_for_invitation(${tokenHash}) AS "orgId"`;
@@ -202,7 +220,10 @@ function createRlsContext(client) {
   // to "not found". Same secret key, same return shape (org id only).
   async function resolveOrgIdForInvitationAny(tx, tokenHash) {
     if (typeof tokenHash !== 'string' || tokenHash.length === 0) return null;
-    const rows = await tx.$queryRaw`SELECT app_org_id_for_invitation_any(${tokenHash}) AS "orgId"`;
+    const rows = await nullOnResolverError(
+      () => tx.$queryRaw`SELECT app_org_id_for_invitation_any(${tokenHash}) AS "orgId"`,
+      'resolveOrgIdForInvitationAny',
+    );
     const id = rows?.[0]?.orgId;
     return parseContextId(id);
   }
@@ -221,13 +242,19 @@ function createRlsContext(client) {
 
   async function resolveOrgIdForRepository(tx, fullName, platform) {
     if (typeof fullName !== 'string' || typeof platform !== 'string') return null;
-    const rows = await tx.$queryRaw`SELECT app_org_id_for_repository(${fullName}, ${platform}) AS "orgId"`;
+    const rows = await nullOnResolverError(
+      () => tx.$queryRaw`SELECT app_org_id_for_repository(${fullName}, ${platform}) AS "orgId"`,
+      'resolveOrgIdForRepository',
+    );
     return parseContextId(rows?.[0]?.orgId);
   }
 
   async function resolveUserIdForRepository(tx, fullName, platform) {
     if (typeof fullName !== 'string' || typeof platform !== 'string') return null;
-    const rows = await tx.$queryRaw`SELECT app_user_id_for_repository(${fullName}, ${platform}) AS "userId"`;
+    const rows = await nullOnResolverError(
+      () => tx.$queryRaw`SELECT app_user_id_for_repository(${fullName}, ${platform}) AS "userId"`,
+      'resolveUserIdForRepository',
+    );
     return parseContextId(rows?.[0]?.userId);
   }
 

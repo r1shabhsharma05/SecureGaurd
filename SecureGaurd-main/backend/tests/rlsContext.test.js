@@ -143,6 +143,28 @@ test('resolveOrgIdForInvitationAny passes the secret through and returns the id'
   assert.equal(tx.calls.length, 1);
 });
 
+// F-03/F-04 (ARTEX 28 Nov 2026): when the SQL function is missing (the
+// §5 bundle was never applied in prod) the query throws — the resolver
+// must read as "unknown" (null → the handler's 404/401), never throw
+// (→ 500 for unknown AND real tokens alike).
+function throwingTx() {
+  return {
+    calls: [],
+    async $executeRaw() { return 1; },
+    async $queryRaw() {
+      throw new Error('function app_org_id_for_invitation_any(text) does not exist');
+    },
+  };
+}
+
+test('resolvers fail closed to null when the SQL function is missing (F-03/F-04)', async () => {
+  const tx = throwingTx();
+  const ctx = createRlsContext(mockClient(tx));
+  assert.equal(await ctx.resolveOrgIdForInvitationAny(tx, 'deadbeef'), null);
+  assert.equal(await ctx.resolveOrgIdForRepository(tx, 'acme/web', 'github'), null);
+  assert.equal(await ctx.resolveUserIdForRepository(tx, 'acme/web', 'github'), null);
+});
+
 test('withUserContext sets only the user variable', async () => {
   const tx = mockTx();
   const { withUserContext } = createRlsContext(mockClient(tx));

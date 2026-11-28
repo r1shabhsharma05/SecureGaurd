@@ -96,15 +96,24 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
       return res.status(400).json({ message: 'Could not extract repository full name from payload' });
     }
 
-    // Find the repository in database. Looked up BEFORE signature
-    // verification so the per-repo secret can be tried first; a bad
-    // signature still returns 401 whether or not the repo exists, so
-    // this reveals nothing about registration.
+    // F-03: verify the SHARED secret FIRST, before any database call.
+    // The old order resolved the repo first so the per-repo secret could
+    // be tried first — but the resolvers threw (the §5 SQL functions are
+    // missing in prod) and every unauthenticated delivery 500'd before
+    // verification ran. A valid shared signature is sufficient proof of
+    // authenticity, so it short-circuits the lookup; a bad one still falls
+    // through to the per-repo secret below, and still returns 401 whether
+    // or not the repo exists, so this reveals nothing about registration.
+    const sharedSecret = process.env.WEBHOOK_SECRET;
+    const sharedVerified = sharedSecret
+      ? verifyWithSecret(platform, req, sharedSecret)
+      : false;
+
     // SEC-31: no org context exists yet — the (fullName, platform) pair
     // is the key, so the SECURITY DEFINER resolvers map it to the org +
     // owning user (ids only) and the row is then read under that context.
-    // An unregistered repo resolves to nulls and the signature check
-    // below still runs against the shared secret, exactly as before.
+    // An unregistered repo resolves to nulls (the resolvers fail closed
+    // to null instead of throwing — see utils/rlsContext.js).
     const { organizationId: webhookOrgId, userId: webhookUserId } = await prisma.$transaction(async (tx) => ({
       organizationId: await resolveOrgIdForRepository(tx, repoFullName, platform),
       userId: await resolveUserIdForRepository(tx, repoFullName, platform),
@@ -115,7 +124,10 @@ router.post('/webhook/:platform', webhookLimiter, async (req, res) => {
         }))
       : null;
 
-    if (!verifyWebhookSignature(platform, req, repo)) {
+    // Per-repo secret (the shared secret is re-tried inside
+    // verifyWebhookSignature for callers without a raw body).
+    // Shared-verified deliveries skip this check.
+    if (!sharedVerified && !verifyWebhookSignature(platform, req, repo)) {
       return res.status(401).json({ message: 'Invalid webhook signature or secret token' });
     }
 
